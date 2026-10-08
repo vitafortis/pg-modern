@@ -82,14 +82,6 @@ async function main() {
 			PGM_DATA_DIR: join(tmp, 'data'),
 			PGM_DOCKER_HOSTS: `tcp://127.0.0.1:${DOCKER_PORT}`,
 			PGM_SCAN_PATHS: STACKS,
-			PGM_ARCANE_URL: `http://127.0.0.1:${ARCANE_PORT}`,
-			PGM_ARCANE_API_KEY: 'arc_demo',
-			// Only shown on the login and users pages; never contacted.
-			PGM_OIDC_ISSUER: 'https://auth.home.arpa/application/o/pg-modern/',
-			PGM_OIDC_CLIENT_ID: 'pg-modern',
-			PGM_OIDC_NAME: 'Authentik',
-			PGM_OIDC_AUTO_CREATE: '*@home.arpa',
-			PGM_OIDC_ADMIN_EMAILS: 'sam@home.arpa',
 			NODE_OPTIONS: '--disable-warning=ExperimentalWarning'
 		}
 	});
@@ -105,8 +97,23 @@ async function main() {
 		console.log(`  ✓ ${name}.png`);
 	};
 
-	// First admin, then the login screen as everyone else sees it.
+	// First admin, then integrations set up the way the UI does it.
 	await page.request.post(`${APP}/api/auth/setup`, { data: { email: 'admin', password: ADMIN_PASSWORD } });
+	await page.request.put(`${APP}/api/integrations/sso`, {
+		data: {
+			// Shown on the login and integrations pages; never contacted.
+			name: 'Authentik',
+			issuer: 'https://auth.home.arpa/application/o/pg-modern/',
+			clientId: 'pg-modern',
+			clientSecret: 'demo-secret',
+			autoCreate: '*@home.arpa',
+			adminEmails: 'sam@home.arpa',
+			defaultRole: 'viewer'
+		}
+	});
+	await page.request.post(`${APP}/api/managers`, {
+		data: { name: 'Arcane', url: `http://127.0.0.1:${ARCANE_PORT}`, apiKey: 'arc_demo' }
+	});
 	await page.request.post(`${APP}/api/auth/logout`);
 	await page.goto(`${APP}/login`, { waitUntil: 'networkidle' });
 	await shot('login');
@@ -169,6 +176,10 @@ async function main() {
 	]) {
 		await api('POST', '/api/users', u);
 	}
+	await page.goto(`${APP}/integrations`, { waitUntil: 'networkidle' });
+	await page.waitForSelector('text=Redirect URI');
+	await shot('integrations');
+
 	await page.goto(`${APP}/users`, { waitUntil: 'networkidle' });
 	await page.waitForSelector('text=Jo Park');
 	await shot('users');

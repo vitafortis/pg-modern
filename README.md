@@ -63,7 +63,7 @@ The container runs as an unprivileged user. `--group-add` gives it read access t
 If [Arcane](https://getarcane.app) manages your stacks, you don't need to mount anything. pg·modern reads each project's compose file and `.env` through Arcane's API, across every environment (host) Arcane manages.
 
 1. In Arcane, go to **Settings → API Keys** and create a key with only `environments:list`, `projects:list` and `projects:read`.
-2. In pg·modern, go to **Settings → Docker managers** and add your Arcane URL and the key. Or set `PGM_ARCANE_URL` and `PGM_ARCANE_API_KEY`.
+2. In pg·modern, open **Integrations → Arcane**, enter your Arcane URL (e.g. `http://arcane.lan:3552`) and the key, then **Test** and **Connect**. Or set `PGM_ARCANE_URL` and `PGM_ARCANE_API_KEY`.
 3. Open **Discover → Arcane**.
 
 Published ports resolve to each environment's host address. The API key is stored encrypted, like database passwords.
@@ -100,7 +100,14 @@ Create an OIDC client in your identity provider (confidential, authorization cod
 https://<your pg-modern host>/auth/oidc/callback
 ```
 
-Then configure pg·modern:
+Then open **Integrations → Single sign-on** in pg·modern:
+
+1. Pick your provider, then fill in the issuer URL, client ID and secret.
+2. Click **Test**, then **Enable single sign-on**.
+3. Optionally set who gets an account automatically and who becomes an admin.
+4. Once SSO works, you can turn off password sign-in on the same card.
+
+The redirect URI to register is shown there, with a copy button. Or configure it with environment variables, which then lock the UI fields:
 
 ```yaml
 environment:
@@ -113,6 +120,8 @@ environment:
   # PGM_LOCAL_LOGIN: disabled                    # SSO only, once it works
 ```
 
+If SSO breaks while password sign-in is off, start pg·modern with `PGM_LOCAL_LOGIN=enabled` to get the password form back.
+
 When someone signs in:
 
 1. If their SSO identity is already linked to an account, they're in.
@@ -122,7 +131,7 @@ When someone signs in:
 
 Emails the provider marks as unverified are rejected. An email that's already linked to one SSO identity can't be claimed by another. The flow uses PKCE, state and nonce. Disabling a user or changing their role signs them out immediately.
 
-Behind a reverse proxy, set `PROTOCOL_HEADER` and `HOST_HEADER` so the callback URL is built with your public address, or set `PGM_OIDC_REDIRECT_URI` explicitly. **Settings → Single sign-on** shows the exact redirect URI pg·modern expects.
+Behind a reverse proxy, set `PROTOCOL_HEADER` and `HOST_HEADER` so the callback URL is built with your public address, or set a redirect URI override under **Advanced**.
 
 ## Images
 
@@ -148,8 +157,10 @@ To build it yourself: `docker build -t pg-modern .`
 | **Browse**: virtualized grid with a JSON cell inspector | **Query**: runs in a read-only transaction that is rolled back |
 | ![Structure](docs/screenshots/structure.png) | ![Server overview](docs/screenshots/server.png) |
 | **Structure**: columns, indexes, constraints | **Server overview** |
-| ![Sign in](docs/screenshots/login.png) | ![Light theme](docs/screenshots/overview-light.png) |
-| **Sign in**: SSO or password | **Light theme** |
+| ![Integrations](docs/screenshots/integrations.png) | ![Sign in](docs/screenshots/login.png) |
+| **Integrations**: SSO, Arcane, Docker and folders | **Sign in**: SSO or password |
+| ![Light theme](docs/screenshots/overview-light.png) | |
+| **Light theme** | |
 
 ## Configuration
 
@@ -157,15 +168,15 @@ To build it yourself: `docker build -t pg-modern .`
 | --- | --- | --- |
 | `PGM_DATA_DIR` | `./data` (`/data` in the image) | Encrypted SQLite store and key file |
 | `PGM_SECRET_KEY` | — | Master secret. Unset means a random key is generated in `secret.key` |
-| `PGM_SCAN_PATHS` | — | Comma-separated folders to scan (more can be added in the UI) |
+| `PGM_SCAN_PATHS` | — | Comma-separated folders to scan (more can be added under Integrations) |
 | `PGM_SCAN_DEPTH` | `6` | How deep to recurse into scan folders |
 | `PGM_DOCKER_HOSTS` | local socket | `unix://…` or `tcp://host:2375`, comma-separated |
-| `PGM_ARCANE_URL`, `PGM_ARCANE_API_KEY` | — | An Arcane instance to read projects from (more can be added in Settings) |
+| `PGM_ARCANE_URL`, `PGM_ARCANE_API_KEY` | — | An Arcane instance to read projects from (or add it under Integrations) |
 | `PGM_STATEMENT_TIMEOUT_MS` | `30000` | Per-statement timeout |
 | `PGM_MAX_ROWS` | `5000` | Rows returned per result; the rest are truncated |
 | `PGM_AUTH` | — | `disabled` skips the login screen (trusted networks only) |
-| `PGM_LOCAL_LOGIN` | — | `disabled` hides the email/password form (SSO only) |
-| `PGM_OIDC_ISSUER` | — | OIDC issuer URL; enables SSO |
+| `PGM_LOCAL_LOGIN` | — | `disabled` hides the email/password form (SSO only); `enabled` forces it back on |
+| `PGM_OIDC_ISSUER` | — | OIDC issuer URL; enables SSO (or configure it under Integrations) |
 | `PGM_OIDC_CLIENT_ID`, `PGM_OIDC_CLIENT_SECRET` | — | Client credentials from your identity provider |
 | `PGM_OIDC_NAME` | `SSO` | Login button label |
 | `PGM_OIDC_SCOPES` | `openid email profile` | Requested scopes |

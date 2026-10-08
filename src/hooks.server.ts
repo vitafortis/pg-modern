@@ -1,18 +1,19 @@
 import { json, redirect } from '@sveltejs/kit';
 import type { Handle } from '@sveltejs/kit/hooks';
 import { authenticate } from '#lib/server/auth.ts';
+import { publicUrl } from '#lib/server/origin.ts';
 
 const PUBLIC = ['/login', '/setup', '/auth/oidc/', '/api/auth/', '/api/health'];
 
 /** Pages viewers can't open. */
-const ADMIN_PAGES = ['/discover', '/settings', '/users'];
+const ADMIN_PAGES = ['/discover', '/settings', '/users', '/integrations'];
 
 /**
  * API calls only admins may make. Viewers can browse and query (always
  * read-only, enforced in the query route) but not change anything.
  */
 function adminOnlyApi(method: string, path: string): boolean {
-	if (/^\/api\/(discover|settings|users|managers)(\/|$)/.test(path)) return true;
+	if (/^\/api\/(discover|settings|users|managers|integrations)(\/|$)/.test(path)) return true;
 	if (path === '/api/connections') return method !== 'GET';
 	if (path === '/api/connections/test') return true;
 	if (/^\/api\/connections\/[^/]+$/.test(path)) return method !== 'GET';
@@ -41,6 +42,10 @@ export const handle: Handle = async ({ event, resolve }) => {
 			if (!allowed.includes(host)) return json({ message: 'Cross-origin request blocked' }, { status: 403 });
 		}
 	}
+
+	const visible = publicUrl(event.url, event.request.headers);
+	event.locals.origin = visible.origin;
+	event.locals.secure = visible.protocol === 'https:';
 
 	const { state, user } = authenticate(event.cookies);
 	event.locals.auth = state;

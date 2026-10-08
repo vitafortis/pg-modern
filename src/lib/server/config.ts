@@ -34,8 +34,14 @@ export const config = {
 	/** Folders to scan for .env / compose files, in addition to ones saved in settings. */
 	scanPaths: list(process.env.PGM_SCAN_PATHS),
 	scanDepth: Number(process.env.PGM_SCAN_DEPTH ?? 6),
-	/** `disabled` hides the email/password form (SSO only). */
-	localLoginDisabled: process.env.PGM_LOCAL_LOGIN === 'disabled',
+	/**
+	 * `disabled` hides the email/password form (SSO only); `enabled` forces it on,
+	 * overriding the UI setting — the break-glass if SSO is misconfigured.
+	 */
+	localLogin: (process.env.PGM_LOCAL_LOGIN === 'disabled' ? 'disabled' : process.env.PGM_LOCAL_LOGIN === 'enabled' ? 'enabled' : undefined) as
+		| 'disabled'
+		| 'enabled'
+		| undefined,
 	oidc: process.env.PGM_OIDC_ISSUER
 		? {
 				issuer: process.env.PGM_OIDC_ISSUER,

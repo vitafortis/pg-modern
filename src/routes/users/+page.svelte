@@ -21,7 +21,7 @@
 	async function load() {
 		[users, oidc] = await Promise.all([
 			api.get<User[]>('/api/users'),
-			api.get<{ env: { oidc: Oidc } }>('/api/settings').then((s) => s.env.oidc)
+			api.get<{ config: Oidc }>('/api/integrations/sso').then((s) => s.config)
 		]);
 		loading = false;
 	}

@@ -253,7 +253,7 @@
 					<div class="card p-8 text-center text-sm text-muted-foreground">
 						<Server class="mx-auto mb-3 size-6 opacity-60" />
 						No Docker endpoint configured. Mount <code class="font-mono">/var/run/docker.sock</code> or add a
-						<code class="font-mono">tcp://</code> host in <a href="/settings" class="text-primary">Settings</a>.
+						<code class="font-mono">tcp://</code> host in <a href="/integrations#docker" class="text-primary">Integrations</a>.
 					</div>
 				{:else if docker}
 					<div class="space-y-5">
@@ -302,7 +302,7 @@
 								Connect an Arcane instance with an API key and pg·modern reads every project's compose file and .env across all of its
 								environments — no folder mounts or file permissions needed.
 							</p>
-							<a class="btn btn-primary mt-5" href="/settings#managers"><Plus />Connect Arcane</a>
+							<a class="btn btn-primary mt-5" href="/integrations#arcane"><Plus />Connect Arcane</a>
 						</div>
 					</div>
 				{:else if loadingManagers && !managerScans}

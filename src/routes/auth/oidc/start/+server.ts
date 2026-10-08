@@ -1,14 +1,14 @@
 import { redirect } from '@sveltejs/kit';
-import { config } from '#lib/server/config.ts';
+import { ssoConfig } from '#lib/server/sso.ts';
 import { beginLogin } from '#lib/server/oidc.ts';
 import type { RequestHandler } from './$types';
 
-export const GET: RequestHandler = async ({ cookies, url }) => {
-	if (!config.oidc) redirect(303, '/login');
+export const GET: RequestHandler = async ({ cookies, url, locals }) => {
+	if (!ssoConfig()) redirect(303, '/login');
 	const next = url.searchParams.get('next') ?? '/';
 	let target: URL;
 	try {
-		target = await beginLogin(cookies, url.origin, next, url.protocol === 'https:');
+		target = await beginLogin(cookies, locals.origin, next, locals.secure);
 	} catch (err) {
 		redirect(303, `/login?error=${encodeURIComponent(`Could not reach the identity provider: ${(err as Error).message}`)}`);
 	}

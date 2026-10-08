@@ -16,7 +16,8 @@
 		Search,
 		PanelLeftClose,
 		PanelLeftOpen,
-		Users
+		Users,
+		Plug
 	} from '@lucide/svelte';
 	import Logo from '#lib/components/Logo.svelte';
 	import Toaster from '#lib/components/Toaster.svelte';
@@ -53,6 +54,7 @@
 		...(isAdmin()
 			? [
 					{ href: '/discover', label: 'Discover', icon: Radar },
+					{ href: '/integrations', label: 'Integrations', icon: Plug },
 					{ href: '/users', label: 'Users', icon: Users },
 					{ href: '/settings', label: 'Settings', icon: Settings }
 				]

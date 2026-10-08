@@ -1,30 +1,39 @@
 import * as client from 'openid-client';
 import type { Cookies } from '@sveltejs/kit';
-import { config } from './config.ts';
+import { ssoConfig, type SsoConfig } from './sso.ts';
 import { decrypt, encrypt } from './crypto.ts';
 import { emailMatches } from './auth.ts';
 import { createUser, findUserByEmail, findUserBySub, updateUser } from './store.ts';
 import type { User } from '#lib/types.ts';
 
 const FLOW_COOKIE = 'pgm_oidc';
-let discovered: Promise<client.Configuration> | undefined;
+let discovered: { key: string; config: Promise<client.Configuration> } | undefined;
 
-function settings() {
-	if (!config.oidc) throw new Error('OIDC is not configured');
-	return config.oidc;
+function settings(): SsoConfig {
+	const o = ssoConfig();
+	if (!o) throw new Error('Single sign-on is not configured');
+	return o;
 }
 
-/** Discovery is cached; a failure clears the cache so the next attempt retries. */
-function configuration(): Promise<client.Configuration> {
-	const o = settings();
+export function discover(o: Pick<SsoConfig, 'issuer' | 'clientId' | 'clientSecret'>): Promise<client.Configuration> {
 	const issuer = new URL(o.issuer);
 	// Plain-http issuers are common on a LAN; openid-client only allows them when asked.
 	const options = issuer.protocol === 'http:' ? { execute: [client.allowInsecureRequests] } : undefined;
-	discovered ??= client.discovery(issuer, o.clientId, o.clientSecret, undefined, options).catch((err) => {
-		discovered = undefined;
-		throw err;
-	});
-	return discovered;
+	return client.discovery(issuer, o.clientId, o.clientSecret, undefined, options);
+}
+
+/** Discovery is cached per issuer/client (so edits in the UI take effect); failures aren't cached. */
+function configuration(): Promise<client.Configuration> {
+	const o = settings();
+	const key = JSON.stringify([o.issuer, o.clientId, o.clientSecret]);
+	if (discovered?.key !== key) {
+		const pending = discover(o).catch((err) => {
+			if (discovered?.config === pending) discovered = undefined;
+			throw err;
+		});
+		discovered = { key, config: pending };
+	}
+	return discovered.config;
 }
 
 export function redirectUri(origin: string): string {
@@ -56,7 +65,7 @@ export async function beginLogin(cookies: Cookies, origin: string, next: string,
 export class LoginRefused extends Error {}
 
 /** Completes the code exchange and maps the identity to a local user (creating one if allowed). */
-export async function completeLogin(cookies: Cookies, currentUrl: URL): Promise<{ user: User; next: string }> {
+export async function completeLogin(cookies: Cookies, currentUrl: URL, origin: string): Promise<{ user: User; next: string }> {
 	const raw = cookies.get(FLOW_COOKIE);
 	cookies.delete(FLOW_COOKIE, { path: '/auth/oidc' });
 	if (!raw) throw new LoginRefused('Sign-in session expired. Please try again.');
@@ -64,7 +73,7 @@ export async function completeLogin(cookies: Cookies, currentUrl: URL): Promise<
 
 	const cfg = await configuration();
 	// The callback URL must match the registered redirect URI exactly.
-	const callback = new URL(redirectUri(currentUrl.origin));
+	const callback = new URL(redirectUri(origin));
 	callback.search = currentUrl.search;
 	const tokens = await client.authorizationCodeGrant(cfg, callback, {
 		pkceCodeVerifier: flow.verifier,

@@ -8,6 +8,10 @@ declare global {
 		interface Locals {
 			auth: import('#lib/server/auth.ts').AuthState;
 			user: import('#lib/types.ts').User | null;
+			/** Origin the browser used (see origin.ts); use instead of url.origin. */
+			origin: string;
+			/** Whether the browser connection is https, for Secure cookies. */
+			secure: boolean;
 		}
 	}
 }
