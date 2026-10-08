@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1
-FROM node:24-alpine AS build
+# Build once on the runner's native platform: the output is plain JS and the
+# production dependencies have no native code, so every target arch can reuse it
+# (no slow, flaky QEMU emulation during the build).
+FROM --platform=$BUILDPLATFORM node:24-alpine AS build
 WORKDIR /app
 RUN corepack enable
 COPY package.json pnpm-lock.yaml .npmrc ./
