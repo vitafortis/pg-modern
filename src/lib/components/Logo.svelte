@@ -1,0 +1,12 @@
+<script lang="ts">
+	let { size = 28 }: { size?: number } = $props();
+</script>
+
+<svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" class="shrink-0">
+	<rect width="32" height="32" rx="8" fill="var(--primary)" />
+	<g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" transform="translate(6 6) scale(0.8333)">
+		<ellipse cx="12" cy="5" rx="9" ry="3" />
+		<path d="M3 5v14a9 3 0 0 0 18 0V5" />
+		<path d="M3 12a9 3 0 0 0 18 0" />
+	</g>
+</svg>

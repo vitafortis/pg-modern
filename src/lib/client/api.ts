@@ -1,0 +1,37 @@
+import type { QueryError } from '#lib/types.ts';
+
+export class ApiError extends Error {
+	constructor(
+		message: string,
+		public status: number,
+		public detail?: QueryError
+	) {
+		super(message);
+	}
+}
+
+async function request<T>(method: string, url: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+	const res = await fetch(url, {
+		method,
+		headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+		body: body === undefined ? undefined : JSON.stringify(body),
+		signal
+	});
+	if (res.status === 401 && !url.startsWith('/api/auth/')) {
+		location.href = `/login?next=${encodeURIComponent(location.pathname)}`;
+	}
+	const data = await res.json().catch(() => ({}));
+	if (!res.ok) throw new ApiError(data.message ?? res.statusText, res.status, data);
+	return data as T;
+}
+
+export const api = {
+	get: <T>(url: string, signal?: AbortSignal) => request<T>('GET', url, undefined, signal),
+	post: <T>(url: string, body?: unknown, signal?: AbortSignal) => request<T>('POST', url, body ?? {}, signal),
+	put: <T>(url: string, body: unknown) => request<T>('PUT', url, body),
+	del: <T>(url: string) => request<T>('DELETE', url)
+};
+
+export function errorMessage(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
+}

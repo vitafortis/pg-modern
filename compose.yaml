@@ -1,0 +1,53 @@
+# pg·modern — default deployment.
+#
+#   docker compose up -d
+#   open http://<this-host>:3030 and choose an admin password
+#
+services:
+  pg-modern:
+    image: ghcr.io/vitafortis/pg-modern:latest
+    container_name: pg-modern
+    restart: unless-stopped
+    ports:
+      - "3030:3000"
+    environment:
+      # Read-only Docker API (see docker-proxy below) for container discovery.
+      PGM_DOCKER_HOSTS: tcp://docker-proxy:2375
+      # Folders mounted below that get scanned for .env / compose files.
+      PGM_SCAN_PATHS: /stacks
+      # Optional: manage the credential encryption key yourself.
+      # Otherwise a random key is generated at /data/secret.key — back it up.
+      # PGM_SECRET_KEY: change-me-to-a-long-random-string
+      # Behind a TLS reverse proxy, uncomment so secure cookies work:
+      # PROTOCOL_HEADER: x-forwarded-proto
+      # HOST_HEADER: x-forwarded-host
+    volumes:
+      - pg-modern-data:/data
+      # Where your stacks live. Read-only is all pg·modern needs.
+      - /opt/stacks:/stacks:ro
+    extra_hosts:
+      # Lets pg·modern reach database ports published on the Docker host.
+      - host.docker.internal:host-gateway
+    depends_on:
+      - docker-proxy
+    # To reach databases by container name instead of published ports,
+    # join their networks too, e.g.:
+    # networks: [default, immich_default]
+
+  # pg·modern only lists and inspects containers, so it never gets the raw socket.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: pg-modern-docker-proxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      POST: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+volumes:
+  pg-modern-data:
+
+# networks:
+#   immich_default:
+#     external: true
