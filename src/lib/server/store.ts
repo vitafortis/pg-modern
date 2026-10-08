@@ -90,6 +90,14 @@ function migrate(h: DatabaseSync) {
 	if (!userCols.some((c) => c.name === 'needs_profile')) {
 		h.exec('ALTER TABLE users ADD COLUMN needs_profile INTEGER NOT NULL DEFAULT 0');
 	}
+	// One-time backfill (tracked in kv, independent of when the column appeared): accounts
+	// created before this flag existed, like an earlier upgrade's "admin", have no real
+	// email yet, so ask them for one on their next sign-in.
+	const backfilled = h.prepare(`SELECT 1 FROM kv WHERE key = 'migration:needs-profile'`).get();
+	if (!backfilled) {
+		h.exec(`UPDATE users SET needs_profile = 1 WHERE email NOT LIKE '%@%' AND oidc_sub IS NULL`);
+		h.prepare(`INSERT INTO kv (key, value) VALUES ('migration:needs-profile', 'true')`).run();
+	}
 
 	// v1 had a single admin password; it becomes the local user "admin", who is
 	// asked for a real email and name on their next sign-in.
