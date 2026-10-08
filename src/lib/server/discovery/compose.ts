@@ -1,4 +1,4 @@
-import { parse as parseYaml } from 'yaml';
+import { parseDocument } from 'yaml';
 import { extractCandidates, fingerprint, interpolate } from './env.ts';
 import { looksLikePostgresServer } from './detect.ts';
 import type { Candidate, ConnectionSource } from '#lib/types.ts';
@@ -14,6 +14,17 @@ export interface ComposeContext {
 	readEnvFile: (path: string) => Promise<Record<string, string>>;
 	/** Address that reaches ports published on the Docker host (default: localhost). */
 	publishedHost?: string;
+	/** Called when the file isn't valid YAML, so callers can surface it instead of silently skipping. */
+	onParseError?: (message: string) => void;
+}
+
+/**
+ * Lenient parse: compose files lean on YAML merge keys (`<<: *defaults`) and custom tags
+ * (`!reset`, `!override`), and a partly broken file should still yield what it can.
+ */
+export function parseCompose(content: string): { value: unknown; errors: string[] } {
+	const doc = parseDocument(content, { merge: true, logLevel: 'silent' });
+	return { value: doc.toJS({ maxAliasCount: 1000 }), errors: doc.errors.map((e) => e.message.split('\n')[0]) };
 }
 
 type ComposeService = {
@@ -62,8 +73,11 @@ export async function composeCandidates(content: string, ctx: ComposeContext): P
 	const vars = ctx.vars;
 	let doc: { services?: Record<string, ComposeService>; name?: string };
 	try {
-		doc = parseYaml(content) ?? {};
-	} catch {
+		const parsed = parseCompose(content);
+		if (parsed.errors.length) ctx.onParseError?.(parsed.errors[0]);
+		doc = (parsed.value ?? {}) as typeof doc;
+	} catch (err) {
+		ctx.onParseError?.((err as Error).message.split('\n')[0]);
 		return [];
 	}
 	const services = doc.services ?? {};

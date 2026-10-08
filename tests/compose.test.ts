@@ -56,3 +56,42 @@ test('unpublished databases fall back to the service name with a note', async ()
 	assert.equal(out[0].host, 'pg');
 	assert.match(out[0].notes.join(' '), /No published port/);
 });
+
+test('YAML anchors/merge keys and compose tags are understood', async () => {
+	const doc = `x-db: &db
+  image: postgres:16
+  environment:
+    POSTGRES_USER: scanopy
+    POSTGRES_PASSWORD: pw
+services:
+  postgres:
+    <<: *db
+    ports: ["5439:5432"]
+  web:
+    image: nginx
+    environment: !reset {}
+`;
+	const out = await composeCandidates(doc, {
+		project: 'scanopy',
+		source: { kind: 'arcane', ref: 'x' },
+		vars: {},
+		readEnvFile: async () => ({}),
+		publishedHost: '192.168.4.23'
+	});
+	assert.equal(out.length, 1);
+	assert.equal(`${out[0].user}@${out[0].host}:${out[0].port}`, 'scanopy@192.168.4.23:5439');
+});
+
+test('invalid YAML is reported, not silently skipped', async () => {
+	const errors: string[] = [];
+	const out = await composeCandidates('services:\n  db:\n    image: postgres\n   bad: [', {
+		project: 'p',
+		source: { kind: 'env', ref: 'x' },
+		vars: {},
+		readEnvFile: async () => ({}),
+		onParseError: (m) => errors.push(m)
+	});
+	// Still best-effort: the database is found, and the problem is reported.
+	assert.equal(out.length, 1);
+	assert.equal(errors.length, 1);
+});

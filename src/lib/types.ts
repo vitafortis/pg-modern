@@ -168,6 +168,13 @@ export interface ManagerScan {
 		error?: string;
 		/** Non-fatal problem, e.g. the API key can't list containers. */
 		warning?: string;
+		/** Diagnostics so a missing database can be explained. */
+		projectsRead?: number;
+		containersInspected?: number;
+		/** Containers with no Postgres server or credentials found. */
+		skipped?: { name: string; image: string; state: string }[];
+		/** Compose files that didn't parse cleanly (results are best-effort). */
+		parseErrors?: { project: string; message: string }[];
 		projects: { id: string; name: string; status: string; candidates: Candidate[] }[];
 	}[];
 }

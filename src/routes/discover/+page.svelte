@@ -357,9 +357,19 @@
 											<Server class="size-3.5" />{env.name}<span class="font-mono opacity-70">{env.host}</span>
 											{#if env.error}<span class="badge badge-danger">{env.error}</span>{/if}
 										</div>
+										{#if env.projectsRead !== undefined || env.containersInspected !== undefined}
+											<p class="mb-2 pl-1 text-[11px] text-muted-foreground">
+												Read {env.projectsRead ?? 0} project{env.projectsRead === 1 ? '' : 's'}{#if env.containersInspected !== undefined}{' '}and inspected {env.containersInspected} container{env.containersInspected === 1 ? '' : 's'}{/if}.
+											</p>
+										{/if}
 										{#if env.warning}
 											<p class="mb-2 flex items-center gap-1.5 pl-1 text-[11px] text-warning"><CircleAlert class="size-3.5 shrink-0" />{env.warning}</p>
 										{/if}
+										{#each env.parseErrors ?? [] as pe (pe.project)}
+											<p class="mb-2 flex items-center gap-1.5 pl-1 text-[11px] text-warning">
+												<CircleAlert class="size-3.5 shrink-0" />{pe.project}: compose file didn't parse cleanly ({pe.message}); results may be incomplete.
+											</p>
+										{/each}
 										{#if !env.error && !env.projects.length}
 											<div class="card p-4 text-center text-xs text-muted-foreground">
 												{hidden > 0 ? 'Nothing matches the current filters.' : 'No Postgres found in this environment’s projects.'}
@@ -383,6 +393,23 @@
 												</div>
 											{/each}
 										</div>
+										{#if env.skipped?.length}
+											<details class="card mt-3 overflow-hidden">
+												<summary class="cursor-pointer px-4 py-2.5 text-xs text-muted-foreground select-none hover:text-foreground">
+													{env.skipped.length} other container{env.skipped.length === 1 ? '' : 's'} without Postgres
+												</summary>
+												<div class="max-h-80 divide-y divide-border overflow-y-auto border-t border-border">
+													{#each env.skipped as c, i (i)}
+														<div class="flex items-center gap-3 px-4 py-1.5 text-xs">
+															<span class="size-1.5 shrink-0 rounded-full {c.state === 'running' ? 'bg-success' : 'bg-muted-foreground/40'}"></span>
+															<span class="w-56 shrink-0 truncate font-medium">{c.name}</span>
+															<span class="min-w-0 flex-1 truncate font-mono text-muted-foreground">{c.image}</span>
+															{#if otherEngine(c.image)}<span class="badge">{otherEngine(c.image)} · not Postgres</span>{/if}
+														</div>
+													{/each}
+												</div>
+											</details>
+										{/if}
 									</div>
 								{/each}
 							</section>

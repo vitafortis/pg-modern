@@ -112,7 +112,7 @@ async function scanArcaneContainers(
 	client: ArcaneClient,
 	manager: Manager,
 	env: { id: string; name: string; host: string }
-): Promise<{ project: string; status: string; candidates: Candidate[] }[]> {
+): Promise<{ groups: { project: string; status: string; candidates: Candidate[] }[]; inspected: number; skipped: { name: string; image: string; state: string }[] }> {
 	const base = `/environments/${encodeURIComponent(env.id)}/containers`;
 	const list = (await client.list<ArcaneContainer>(base)).slice(0, 500);
 	const details = await mapLimit(list, 8, (c) =>
@@ -208,7 +208,16 @@ async function scanArcaneContainers(
 			}
 		}
 	}
-	return [...out.values()];
+	const used = new Set<string>();
+	for (const c of details) {
+		const vars = envMap(c.config?.env ?? null);
+		if (isServer(c) || extractCandidates(vars, { label: '', source: { kind: 'arcane' } }).length) used.add(c.id);
+	}
+	const skipped = details
+		.filter((c) => !used.has(c.id))
+		.map((c) => ({ name: nameOf(c), image: c.image, state: stateOf(c) }))
+		.sort((a, b) => a.name.localeCompare(b.name));
+	return { groups: [...out.values()], inspected: details.length, skipped };
 }
 
 /** Address for ports published on an environment's Docker host. */
@@ -235,6 +244,7 @@ async function scanArcane(manager: Manager, apiKey: string): Promise<{ scan: Man
 		scan.environments.push(entry);
 		try {
 			const projects = await client.list<ArcaneProject>(`/environments/${encodeURIComponent(env.id)}/projects`);
+			entry.projectsRead = projects.length;
 			await mapLimit(projects, 6, async (p) => {
 				const base = `/environments/${encodeURIComponent(env.id)}/projects/${encodeURIComponent(p.id)}`;
 				// Compose and .env content live on the /compose section (older versions return them on the project).
@@ -247,7 +257,8 @@ async function scanArcane(manager: Manager, apiKey: string): Promise<{ scan: Man
 					vars,
 					// Arcane keeps the project's env next to the compose file; other env_files aren't exposed.
 					readEnvFile: async (path) => (/^(\.\/)?\.env$/.test(path) ? vars : {}),
-					publishedHost: host
+					publishedHost: host,
+					onParseError: (message) => (entry.parseErrors ??= []).push({ project: p.name, message })
 				});
 				if (!candidates.length) return;
 				const unique = candidates.filter((c, i) => candidates.findIndex((x) => x.fingerprint === c.fingerprint) === i);
@@ -260,7 +271,10 @@ async function scanArcane(manager: Manager, apiKey: string): Promise<{ scan: Man
 		}
 		try {
 			const seen = new Set(entry.projects.flatMap((p) => p.candidates.map((c) => c.fingerprint)));
-			for (const g of await scanArcaneContainers(client, manager, entry)) {
+			const scanned = await scanArcaneContainers(client, manager, entry);
+			entry.containersInspected = scanned.inspected;
+			entry.skipped = scanned.skipped;
+			for (const g of scanned.groups) {
 				const fresh = g.candidates.filter((c, i, arr) => !seen.has(c.fingerprint) && arr.findIndex((x) => x.fingerprint === c.fingerprint) === i);
 				if (!fresh.length) continue;
 				fresh.forEach((c) => seen.add(c.fingerprint));
