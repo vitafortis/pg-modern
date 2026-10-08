@@ -2,11 +2,11 @@ import { request } from 'node:http';
 import { config, IN_CONTAINER } from '../config.ts';
 import { getSettings } from '../store.ts';
 import { extractCandidates, fingerprint } from './env.ts';
+import { looksLikePostgresServer } from './detect.ts';
 import { mapLimit, probe } from './probe.ts';
 import type { Candidate, DockerCandidateGroup } from '#lib/types.ts';
 
-const PG_IMAGE =
-	/(^|\/)(postgres|postgresql|postgis|timescaledb[\w-]*|pgvector|pgvecto-rs|paradedb|supabase\/postgres|spilo[\w-]*|cloudnative-pg|crunchy-postgres)(:|@|$)|immich-app\/postgres|tensorchord\/|apache\/age/i;
+
 
 interface ContainerSummary {
 	Id: string;
@@ -24,6 +24,18 @@ interface ContainerInspect {
 		Ports: Record<string, { HostIp: string; HostPort: string }[] | null> | null;
 		Networks: Record<string, { IPAddress: string; Aliases: string[] | null }> | null;
 	};
+}
+
+/** Turns socket/HTTP failures into a fix the user can apply. */
+function explainDockerError(endpoint: string, err: unknown): string {
+	const e = err as NodeJS.ErrnoException;
+	if (e.code === 'EACCES') {
+		return `Permission denied on ${endpoint}. The container runs as a non-root user: add group_add with the socket's group id, or use the read-only docker-socket-proxy from the default compose file.`;
+	}
+	if (e.code === 'ENOENT') return `${endpoint} doesn't exist inside this container — mount /var/run/docker.sock or point PGM_DOCKER_HOSTS at a proxy.`;
+	if (e.code === 'ECONNREFUSED') return `Connection refused at ${endpoint} — is the Docker API / socket proxy running?`;
+	if (/403/.test(e.message ?? '')) return `${endpoint} refused the request (403). If it's docker-socket-proxy, set CONTAINERS=1.`;
+	return e.message ?? String(err);
 }
 
 export function dockerEndpoints(): string[] {
@@ -139,21 +151,25 @@ export async function discoverDocker(): Promise<{ groups: DockerCandidateGroup[]
 		endpoints.map(async (endpoint): Promise<DockerCandidateGroup> => {
 			try {
 				const list = await dockerGet<ContainerSummary[]>(endpoint, '/containers/json?all=1');
-				const inspected = await mapLimit(list, 8, (c) => dockerGet<ContainerInspect>(endpoint, `/containers/${c.Id}/json`));
+				// One container failing to inspect (e.g. removed mid-scan) shouldn't hide the rest.
+				const results = await mapLimit(list, 8, (c) =>
+					dockerGet<ContainerInspect>(endpoint, `/containers/${c.Id}/json`).catch(() => null)
+				);
+				const kept = list.map((summary, i) => ({ summary, inspect: results[i] })).filter((x) => x.inspect !== null);
+				const inspected = kept.map((x) => x.inspect!);
+				const summaries = kept.map((x) => x.summary);
 
 				// Postgres servers first, so app containers can point at them by name.
 				const servers = new Map<string, Address[]>();
 				const containers: DockerCandidateGroup['containers'] = [];
 
-				const isServer = (c: ContainerInspect) => {
-					const env = envMap(c.Config.Env);
-					return PG_IMAGE.test(c.Config.Image) || 'PGDATA' in env || 'POSTGRES_PASSWORD' in env || 'POSTGRESQL_PASSWORD' in env;
-				};
+				const isServer = (c: ContainerInspect) =>
+					looksLikePostgresServer(c.Config.Image, envMap(c.Config.Env), Object.keys(c.Config.ExposedPorts ?? {}));
 
 				for (const pass of ['servers', 'apps'] as const) {
 					for (let i = 0; i < inspected.length; i++) {
 						const c = inspected[i];
-						const summary = list[i];
+						const summary = summaries[i];
 						const server = isServer(c);
 						if ((pass === 'servers') !== server) continue;
 						const env = envMap(c.Config.Env);
@@ -181,6 +197,14 @@ export async function discoverDocker(): Promise<{ groups: DockerCandidateGroup[]
 								const creds = postgresCredentials(env);
 								const notes = [...creds.notes];
 								if (summary.State !== 'running') notes.push(`Container is ${summary.State}.`);
+								else if (!reachable && IN_CONTAINER) {
+									const nets = Object.keys(c.NetworkSettings.Networks ?? {}).filter((n) => !['bridge', 'host', 'none'].includes(n));
+									notes.push(
+										nets.length
+											? `pg·modern can't reach it: publish port ${internalPort}, or add pg·modern to the ${nets.join(' / ')} network.`
+											: `pg·modern can't reach it: publish port ${internalPort} on the host.`
+									);
+								}
 								const base = { host: primary.host, port: primary.port, database: creds.database, user: creds.user };
 								return {
 									...base,
@@ -227,9 +251,15 @@ export async function discoverDocker(): Promise<{ groups: DockerCandidateGroup[]
 						}
 					}
 				}
-				return { endpoint, containers };
+				// Everything else, so the UI can show what was looked at and why it was skipped.
+				const listed = new Set(containers.map((c) => c.id));
+				const skipped = inspected
+					.map((c, i) => ({ id: c.Id.slice(0, 12), name: c.Name.replace(/^\//, ''), image: c.Config.Image, state: summaries[i].State }))
+					.filter((c) => !listed.has(c.id))
+					.sort((a, b) => a.name.localeCompare(b.name));
+				return { endpoint, inspected: inspected.length, containers, skipped };
 			} catch (err) {
-				return { endpoint, error: err instanceof Error ? err.message : String(err), containers: [] };
+				return { endpoint, error: explainDockerError(endpoint, err), containers: [] };
 			}
 		})
 	);

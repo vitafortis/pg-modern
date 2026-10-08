@@ -1,8 +1,8 @@
 import { parse as parseYaml } from 'yaml';
 import { extractCandidates, fingerprint, interpolate } from './env.ts';
+import { looksLikePostgresServer } from './detect.ts';
 import type { Candidate, ConnectionSource } from '#lib/types.ts';
 
-const PG_IMAGE = /postgres|postgis|timescale|pgvector|pgvecto|paradedb|spilo|immich-app\/postgres|tensorchord/i;
 
 export interface ComposeContext {
 	/** Project name when the file has no top-level `name:`. */
@@ -86,7 +86,8 @@ export async function composeCandidates(content: string, ctx: ComposeContext): P
 	const servers = new Map<string, { addrs: { host: string; port: number; label: string }[]; server: Candidate }>();
 	for (const [name, svc] of Object.entries(services)) {
 		const env = await serviceEnv(svc);
-		const isServer = PG_IMAGE.test(interpolate(svc.image ?? '', vars)) || 'POSTGRES_PASSWORD' in env || 'PGDATA' in env;
+		const exposed = (svc.ports ?? []).some((p) => /(^|:)5432(\/tcp)?$/.test(typeof p === 'object' ? String(p.target) : String(p)));
+		const isServer = looksLikePostgresServer(interpolate(svc.image ?? '', vars), env, exposed ? ['5432/tcp'] : []);
 		if (!isServer) continue;
 		const internal = Number(env.PGPORT) || 5432;
 		const pub = publishedPort(svc.ports, internal, ctx.publishedHost ?? 'localhost');

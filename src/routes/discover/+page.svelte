@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { Boxes, Container, FileCode2, FolderSearch, LoaderCircle, Plus, Radar, RefreshCw, Server, X, Download, Power, Wifi } from '@lucide/svelte';
+	import { Boxes, CircleAlert, Container, FileCode2, FolderSearch, LoaderCircle, Plus, Radar, RefreshCw, Server, X, Download, Power, Wifi } from '@lucide/svelte';
 	import PageHeader from '#lib/components/PageHeader.svelte';
 	import CandidateRow, { type Choice } from '#lib/components/CandidateRow.svelte';
 	import { api, errorMessage } from '#lib/client/api.ts';
@@ -48,6 +48,9 @@
 				.filter((c) => c.candidates.length)
 		}))
 	);
+	const OTHER_DB = /mariadb|mysql|percona|mongo|redis|valkey|keydb|influx|clickhouse|elastic|opensearch|couch|neo4j|cassandra|mssql|sqlserver|dragonfly|memcached|etcd/i;
+	const otherEngine = (image: string) => OTHER_DB.exec(image)?.[0].toLowerCase();
+
 	const runningStatus = (s: string) => /running|up/i.test(s) && !/^stopped/i.test(s);
 	const visibleManagers = $derived(
 		(managerScans ?? []).map((m) => ({
@@ -259,10 +262,17 @@
 					<div class="space-y-5">
 						{#each visibleDocker as group (group.endpoint)}
 							<section>
-								<div class="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+								<div class="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
 									<Server class="size-3.5" /><span class="font-mono">{group.endpoint}</span>
-									{#if group.error}<span class="badge badge-danger">{group.error}</span>{/if}
+									{#if group.inspected !== undefined}
+										<span>· inspected {group.inspected} container{group.inspected === 1 ? '' : 's'}, {group.inspected - (group.skipped?.length ?? 0)} with Postgres or Postgres credentials</span>
+									{/if}
 								</div>
+								{#if group.error}
+									<div class="mb-3 flex items-start gap-2 rounded-xl border border-danger/30 bg-danger/5 p-3 text-xs">
+										<CircleAlert class="mt-px size-4 shrink-0 text-danger" /><span>{group.error}</span>
+									</div>
+								{/if}
 								{#if !group.error && group.containers.length === 0}
 									<div class="card p-6 text-center text-sm text-muted-foreground">
 										{hidden > 0 ? 'Nothing matches the current filters.' : 'No Postgres containers or database credentials found on this host.'}
@@ -287,8 +297,34 @@
 										</div>
 									{/each}
 								</div>
+								{#if group.skipped?.length}
+									<details class="card mt-3 overflow-hidden">
+										<summary class="cursor-pointer px-4 py-2.5 text-xs text-muted-foreground select-none hover:text-foreground">
+											{group.skipped.length} other container{group.skipped.length === 1 ? '' : 's'} without Postgres
+											{#if group.skipped.some((c) => otherEngine(c.image))}
+												<span class="ml-1">— includes {[...new Set(group.skipped.map((c) => otherEngine(c.image)).filter(Boolean))].join(', ')}, which pg·modern doesn't support</span>
+											{/if}
+										</summary>
+										<div class="max-h-80 divide-y divide-border overflow-y-auto border-t border-border">
+											{#each group.skipped as c (c.id)}
+												<div class="flex items-center gap-3 px-4 py-1.5 text-xs">
+													<span class="size-1.5 shrink-0 rounded-full {c.state === 'running' ? 'bg-success' : 'bg-muted-foreground/40'}"></span>
+													<span class="w-56 shrink-0 truncate font-medium">{c.name}</span>
+													<span class="min-w-0 flex-1 truncate font-mono text-muted-foreground">{c.image}</span>
+													{#if otherEngine(c.image)}<span class="badge">{otherEngine(c.image)} · not Postgres</span>{/if}
+												</div>
+											{/each}
+										</div>
+									</details>
+								{/if}
 							</section>
 						{/each}
+						{#if docker.every((g) => g.endpoint.startsWith('unix://'))}
+							<p class="text-[11px] text-muted-foreground">
+								Only the Docker on the machine running pg·modern is scanned. Databases on other hosts? Connect
+								<a class="text-primary" href="/integrations#arcane">Arcane</a> or add a <a class="text-primary" href="/integrations#docker">tcp:// endpoint</a>.
+							</p>
+						{/if}
 					</div>
 				{/if}
 			{:else if tab === 'managers'}

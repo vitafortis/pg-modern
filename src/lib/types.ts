@@ -68,6 +68,10 @@ export interface Candidate {
 export interface DockerCandidateGroup {
 	endpoint: string;
 	error?: string;
+	/** How many containers were inspected on this endpoint. */
+	inspected?: number;
+	/** Containers with no Postgres server or credentials found. */
+	skipped?: { id: string; name: string; image: string; state: string }[];
 	containers: {
 		id: string;
 		name: string;
