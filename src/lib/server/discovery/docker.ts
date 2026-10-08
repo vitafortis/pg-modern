@@ -71,7 +71,7 @@ function dockerGet<T>(endpoint: string, path: string): Promise<T> {
 	});
 }
 
-function envMap(env: string[] | null): Record<string, string> {
+export function envMap(env: string[] | null): Record<string, string> {
 	const out: Record<string, string> = {};
 	for (const line of env ?? []) {
 		const i = line.indexOf('=');
@@ -92,7 +92,7 @@ function publishedHost(endpoint: string, hostIp: string): string {
 	return new URL(endpoint.replace(/^tcp:/, 'http:')).hostname;
 }
 
-function uniqueAddresses<T extends { host: string; port: number }>(list: T[]): T[] {
+export function uniqueAddresses<T extends { host: string; port: number }>(list: T[]): T[] {
 	const seen = new Set<string>();
 	return list.filter((a) => {
 		const k = `${a.host.toLowerCase()}:${a.port}`;
@@ -100,7 +100,7 @@ function uniqueAddresses<T extends { host: string; port: number }>(list: T[]): T
 	});
 }
 
-type Address = { host: string; port: number; label: string };
+export type Address = { host: string; port: number; label: string };
 
 function addressesFor(endpoint: string, c: ContainerInspect, internalPort: number): Address[] {
 	const out: Address[] = [];
@@ -123,14 +123,14 @@ function addressesFor(endpoint: string, c: ContainerInspect, internalPort: numbe
 	return out;
 }
 
-async function pickReachable(addresses: Address[]): Promise<{ primary: Address; alternates: Address[]; reachable: boolean }> {
+export async function pickReachable(addresses: Address[]): Promise<{ primary: Address; alternates: Address[]; reachable: boolean }> {
 	const results = await Promise.all(addresses.map((a) => probe(a.host, a.port)));
 	const idx = results.findIndex(Boolean);
 	const primary = addresses[idx === -1 ? 0 : idx];
 	return { primary, alternates: uniqueAddresses(addresses.filter((a) => a !== primary)), reachable: idx !== -1 };
 }
 
-function postgresCredentials(env: Record<string, string>) {
+export function postgresCredentials(env: Record<string, string>) {
 	const notes: string[] = [];
 	const user = env.POSTGRES_USER || env.POSTGRESQL_USERNAME || env.POSTGRESQL_USER || 'postgres';
 	let password = env.POSTGRES_PASSWORD || env.POSTGRESQL_PASSWORD;

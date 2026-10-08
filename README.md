@@ -60,9 +60,9 @@ The container runs as an unprivileged user. `--group-add` gives it read access t
 
 ### Using Arcane?
 
-If [Arcane](https://getarcane.app) manages your stacks, you don't need to mount anything. pg·modern reads each project's compose file and `.env` through Arcane's API, across every environment (host) Arcane manages.
+If [Arcane](https://getarcane.app) manages your stacks, you don't need to mount anything. Through Arcane's API, pg·modern reads every container (environment variables, published ports, networks) and every project's compose file and `.env`, across every environment (host) Arcane manages. That includes databases that aren't Arcane projects.
 
-1. In Arcane, go to **Settings → API Keys** and create a key with only `environments:list`, `projects:list` and `projects:read`.
+1. In Arcane, go to **Settings → API Keys** and create a key with only these read-only permissions: `environments:list`, `projects:list`, `projects:read`, `containers:list` and `containers:read`. Without the two container permissions, only Arcane projects are scanned.
 2. In pg·modern, open **Integrations → Arcane**, enter your Arcane URL (e.g. `http://arcane.lan:3552`) and the key, then **Test** and **Connect**. Or set `PGM_ARCANE_URL` and `PGM_ARCANE_API_KEY`.
 3. Open **Discover → Arcane**.
 
@@ -197,7 +197,7 @@ To build it yourself: `docker build -t pg-modern .`
 - Credentials come from `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB`, plus the Bitnami equivalents. Passwords kept in `*_FILE` secrets are flagged so you can type them in.
 - App containers are scanned for connection strings too. When an app points at a sibling container by service name, the candidate is rewritten to an address pg·modern can reach.
 
-**Arcane.** Each environment's projects are read through the API, and their compose and `.env` content goes through the same parser as files on disk.
+**Arcane.** For each environment, every container is inspected through the API, with the same detection as local Docker. Each project's compose and `.env` content also goes through the same parser as files on disk. Results are merged per compose project.
 
 **Files.** Scan folders are walked for `.env`, `.env.*`, `*.env` and `compose.yaml` / `docker-compose.yml`.
 

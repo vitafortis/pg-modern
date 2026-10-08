@@ -1,7 +1,9 @@
 import { config } from '../config.ts';
 import { getManagerKey, getSettings } from '../store.ts';
 import { composeCandidates } from './compose.ts';
-import { parseDotenv } from './env.ts';
+import { looksLikePostgresServer } from './detect.ts';
+import { envMap, pickReachable, postgresCredentials, uniqueAddresses, type Address } from './docker.ts';
+import { extractCandidates, fingerprint, parseDotenv } from './env.ts';
 import { mapLimit, probe } from './probe.ts';
 import type { Candidate, Manager, ManagerScan } from '#lib/types.ts';
 
@@ -67,14 +69,14 @@ class ArcaneClient {
 	/** Reads every page of a paginated list. */
 	async list<T>(path: string): Promise<T[]> {
 		const out: T[] = [];
-		const limit = 100;
-		for (let start = 0; start < 10_000; start += limit) {
-			const sep = path.includes('?') ? '&' : '?';
-			const body = await this.get<{ data?: T[]; pagination?: { totalItems?: number } }>(`${path}${sep}start=${start}&limit=${limit}`);
+		const sep = path.includes('?') ? '&' : '?';
+		while (out.length < 10_000) {
+			const body = await this.get<{ data?: T[]; pagination?: { totalItems?: number } }>(`${path}${sep}start=${out.length}&limit=100`);
 			const page = Array.isArray(body) ? (body as T[]) : (body.data ?? []);
 			out.push(...page);
-			const total = body.pagination?.totalItems;
-			if (page.length < limit || (total !== undefined && out.length >= total)) break;
+			const total = Array.isArray(body) ? undefined : body.pagination?.totalItems;
+			// Advance by what actually came back (Arcane may cap the page size) until its total is reached.
+			if (!page.length || (total !== undefined ? out.length >= total : page.length < 100)) break;
 		}
 		return out;
 	}
@@ -88,6 +90,126 @@ type ArcaneProject = {
 	composeContent?: string;
 	envContent?: string;
 };
+
+type ArcaneContainer = {
+	id: string;
+	name?: string;
+	names?: string[];
+	image: string;
+	state?: string | { status?: string };
+	status?: string;
+	labels?: Record<string, string> | null;
+	ports?: { ip?: string; privatePort: number; publicPort?: number; type?: string }[] | null;
+	networkSettings?: { networks?: Record<string, { ipAddress?: string; aliases?: string[] | null }> | null } | null;
+	config?: { env?: string[] | null } | null;
+};
+
+/**
+ * Postgres found in an environment's containers. Covers databases that aren't Arcane
+ * projects (deployed elsewhere, or defined in an override/included compose file).
+ */
+async function scanArcaneContainers(
+	client: ArcaneClient,
+	manager: Manager,
+	env: { id: string; name: string; host: string }
+): Promise<{ project: string; status: string; candidates: Candidate[] }[]> {
+	const base = `/environments/${encodeURIComponent(env.id)}/containers`;
+	const list = (await client.list<ArcaneContainer>(base)).slice(0, 500);
+	const details = await mapLimit(list, 8, (c) =>
+		client.data<ArcaneContainer>(`${base}/${encodeURIComponent(c.id)}`).then((d) => ({ ...c, ...d })).catch(() => c)
+	);
+
+	const nameOf = (c: ArcaneContainer) => (c.name ?? c.names?.[0] ?? c.id.slice(0, 12)).replace(/^\//, '');
+	const stateOf = (c: ArcaneContainer) => (typeof c.state === 'string' ? c.state : (c.state?.status ?? c.status ?? 'unknown'));
+	const servers = new Map<string, Address[]>();
+	const out = new Map<string, { project: string; status: string; candidates: Candidate[] }>();
+	const push = (group: string, status: string, cand: Candidate) => {
+		const g = out.get(group) ?? { project: group, status, candidates: [] };
+		if (status === 'running') g.status = 'running';
+		g.candidates.push(cand);
+		out.set(group, g);
+	};
+
+	const isServer = (c: ArcaneContainer) =>
+		looksLikePostgresServer(c.image, envMap(c.config?.env ?? null), (c.ports ?? []).map((p) => `${p.privatePort}/${p.type ?? 'tcp'}`));
+
+	for (const pass of ['servers', 'apps'] as const) {
+		for (const c of details) {
+			if ((pass === 'servers') !== isServer(c)) continue;
+			const vars = envMap(c.config?.env ?? null);
+			const name = nameOf(c);
+			const labels = c.labels ?? {};
+			const project = labels['com.docker.compose.project'];
+			const service = labels['com.docker.compose.service'];
+			const group = project ?? name;
+			const status = stateOf(c);
+			const source = { kind: 'arcane' as const, ref: `${manager.name} · ${env.name} · ${name}` };
+
+			if (pass === 'servers') {
+				const internal = Number(vars.PGPORT) || 5432;
+				const networks = Object.entries(c.networkSettings?.networks ?? {});
+				const addresses = uniqueAddresses<Address>([
+					...(c.ports ?? [])
+						.filter((p) => p.privatePort === internal && p.publicPort)
+						.map((p) => ({
+							host: !p.ip || p.ip === '0.0.0.0' || p.ip === '::' ? env.host : p.ip,
+							port: p.publicPort!,
+							label: 'published port'
+						})),
+					{ host: name, port: internal, label: 'container name' },
+					...networks.filter(([, n]) => n.ipAddress).map(([net, n]) => ({ host: n.ipAddress!, port: internal, label: `${net} network` }))
+				]);
+				servers.set(name.toLowerCase(), addresses);
+				if (project && service) servers.set(`${project}::${service}`.toLowerCase(), addresses);
+
+				const creds = postgresCredentials(vars);
+				const { primary, alternates, reachable } = await pickReachable(addresses);
+				const notes = [...creds.notes];
+				if (status !== 'running') notes.push(`Container is ${status}.`);
+				else if (!reachable) {
+					const nets = networks.map(([n]) => n).filter((n) => !['bridge', 'host', 'none'].includes(n));
+					notes.push(
+						addresses[0]?.label === 'published port'
+							? `Published on ${primary.host}:${primary.port}, but pg·modern can't reach it — check firewalls between the hosts.`
+							: `pg·modern can't reach it: publish port ${internal}${nets.length ? `, or add pg·modern to the ${nets.join(' / ')} network` : ''}.`
+					);
+				}
+				const base = { host: primary.host, port: primary.port, database: creds.database, user: creds.user };
+				push(group, status, {
+					...base,
+					fingerprint: fingerprint(base),
+					name: project && service ? `${project}/${service}` : name,
+					password: creds.password,
+					hasPassword: !!creds.password,
+					sslMode: 'prefer',
+					source,
+					alternates,
+					notes,
+					reachable
+				});
+			} else {
+				for (const cand of extractCandidates(vars, { label: project && service ? `${project}/${service}` : name, source })) {
+					const host = cand.host.toLowerCase();
+					const target = (project && servers.get(`${project}::${host}`)) || servers.get(host);
+					if (target?.length) {
+						const { primary, alternates, reachable } = await pickReachable(target);
+						cand.alternates = uniqueAddresses([{ host: cand.host, port: cand.port, label: 'as configured' }, ...alternates]).filter(
+							(a) => a.host !== primary.host || a.port !== primary.port
+						);
+						cand.host = primary.host;
+						cand.port = primary.port;
+						cand.reachable = reachable;
+						cand.fingerprint = fingerprint(cand);
+					} else {
+						cand.reachable = await probe(cand.host, cand.port);
+					}
+					push(group, status, cand);
+				}
+			}
+		}
+	}
+	return [...out.values()];
+}
 
 /** Address for ports published on an environment's Docker host. */
 function environmentHost(env: ArcaneEnvironment, managerUrl: string): string {
@@ -133,10 +255,27 @@ async function scanArcane(manager: Manager, apiKey: string): Promise<{ scan: Man
 				entry.projects.push({ id: p.id, name: p.name, status: p.status ?? detail.status ?? 'unknown', candidates: unique });
 				all.push(...unique);
 			});
-			entry.projects.sort((a, b) => a.name.localeCompare(b.name));
 		} catch (err) {
 			entry.error = (err as Error).message;
 		}
+		try {
+			const seen = new Set(entry.projects.flatMap((p) => p.candidates.map((c) => c.fingerprint)));
+			for (const g of await scanArcaneContainers(client, manager, entry)) {
+				const fresh = g.candidates.filter((c, i, arr) => !seen.has(c.fingerprint) && arr.findIndex((x) => x.fingerprint === c.fingerprint) === i);
+				if (!fresh.length) continue;
+				fresh.forEach((c) => seen.add(c.fingerprint));
+				const existing = entry.projects.find((p) => p.name === g.project);
+				if (existing) existing.candidates.push(...fresh);
+				else entry.projects.push({ id: `container:${g.project}`, name: g.project, status: g.status, candidates: fresh });
+				all.push(...fresh);
+			}
+		} catch (err) {
+			const message = (err as Error).message;
+			entry.warning = /rejected the API key|403/.test(message)
+				? 'Add containers:list and containers:read to the API key to also find databases that aren’t Arcane projects.'
+				: `Container scan failed: ${message}`;
+		}
+		entry.projects.sort((a, b) => a.name.localeCompare(b.name));
 	}
 	return { scan, candidates: all };
 }

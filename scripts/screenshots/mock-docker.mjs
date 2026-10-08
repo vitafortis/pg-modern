@@ -142,6 +142,7 @@ export function startMockArcane({ port, dbPort, user, password }) {
 			const list = (projects[m[1]] ?? []).map(({ composeContent: _c, envContent: _e, ...p }) => p);
 			return send({ success: true, data: list, pagination: { totalItems: list.length } });
 		}
+		if (/^\/api\/environments\/[^/]+\/containers$/.test(path)) return send({ success: true, data: [], pagination: { totalItems: 0 } });
 		m = /^\/api\/environments\/([^/]+)\/projects\/([^/]+)\/compose$/.exec(path);
 		const p = m && (projects[m[1]] ?? []).find((x) => x.id === m[2]);
 		if (p) return send({ success: true, data: p });

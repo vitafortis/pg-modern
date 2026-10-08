@@ -166,6 +166,8 @@ export interface ManagerScan {
 		name: string;
 		host: string;
 		error?: string;
+		/** Non-fatal problem, e.g. the API key can't list containers. */
+		warning?: string;
 		projects: { id: string; name: string; status: string; candidates: Candidate[] }[];
 	}[];
 }

@@ -164,8 +164,9 @@
 							<p class="mt-1.5 flex items-center gap-1.5 text-xs text-success"><CircleCheck class="size-3.5" />Connected — {arcaneEnvs} environment{arcaneEnvs === 1 ? '' : 's'}.</p>
 						{:else}
 							<p class="mt-1 text-xs text-muted-foreground">
-								Reads every project's compose and .env across Arcane's hosts. Key permissions: <code class="font-mono">environments:list</code>,
-								<code class="font-mono">projects:list</code>, <code class="font-mono">projects:read</code>.
+								Finds Postgres in every container and project across Arcane's hosts. Read-only key permissions:
+								<code class="font-mono">environments:list</code>, <code class="font-mono">projects:list</code>, <code class="font-mono">projects:read</code>,
+								<code class="font-mono">containers:list</code>, <code class="font-mono">containers:read</code>.
 							</p>
 							<div class="mt-3 grid grid-cols-[1fr_1fr_auto] gap-2">
 								<input class="input h-8 font-mono text-xs" placeholder="http://arcane.lan:3552" aria-label="Arcane URL" bind:value={arcane.url} />

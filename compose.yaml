@@ -16,7 +16,7 @@ services:
       # Folders mounted below that get scanned for .env / compose files.
       PGM_SCAN_PATHS: /stacks
       # Using Arcane? Read its projects over the API instead of mounting folders
-      # (key permissions: environments:list, projects:list, projects:read):
+      # (key permissions: environments:list, projects:list, projects:read, containers:list, containers:read):
       # PGM_ARCANE_URL: https://arcane.home.arpa
       # PGM_ARCANE_API_KEY: ${PGM_ARCANE_API_KEY}
       # Optional: create the first admin here instead of in the setup wizard.

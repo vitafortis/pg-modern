@@ -335,7 +335,7 @@
 							<div class="mx-auto grid size-11 place-items-center rounded-xl bg-primary-soft text-primary"><Boxes class="size-5" /></div>
 							<h2 class="mt-4 font-semibold tracking-tight">Read stacks straight from Arcane</h2>
 							<p class="mt-1.5 text-sm text-muted-foreground">
-								Connect an Arcane instance with an API key and pg·modern reads every project's compose file and .env across all of its
+								Connect an Arcane instance with an API key and pg·modern finds Postgres in every container and project across all of its
 								environments — no folder mounts or file permissions needed.
 							</p>
 							<a class="btn btn-primary mt-5" href="/integrations#arcane"><Plus />Connect Arcane</a>
@@ -357,6 +357,9 @@
 											<Server class="size-3.5" />{env.name}<span class="font-mono opacity-70">{env.host}</span>
 											{#if env.error}<span class="badge badge-danger">{env.error}</span>{/if}
 										</div>
+										{#if env.warning}
+											<p class="mb-2 flex items-center gap-1.5 pl-1 text-[11px] text-warning"><CircleAlert class="size-3.5 shrink-0" />{env.warning}</p>
+										{/if}
 										{#if !env.error && !env.projects.length}
 											<div class="card p-4 text-center text-xs text-muted-foreground">
 												{hidden > 0 ? 'Nothing matches the current filters.' : 'No Postgres found in this environment’s projects.'}
