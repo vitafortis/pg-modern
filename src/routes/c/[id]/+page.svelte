@@ -9,7 +9,7 @@
 	import AccessBadge from '#lib/components/AccessBadge.svelte';
 	import { api, errorMessage } from '#lib/client/api.ts';
 	import { COLORS } from '#lib/client/format.ts';
-	import { connections, editor, toast } from '#lib/client/state.svelte.ts';
+	import { connections, editor, isAdmin, toast } from '#lib/client/state.svelte.ts';
 	import type { RelationSummary, SchemaTree as Tree } from '#lib/types.ts';
 	import type { PageProps } from './$types';
 
@@ -22,6 +22,8 @@
 
 	// Prefer the live store copy so edits (e.g. toggling read-only) apply without a reload.
 	const conn = $derived(connections.list.find((c) => c.id === data.connection.id) ?? data.connection);
+	// Viewers always query read-only, whatever the connection allows.
+	const readOnly = $derived(conn.readOnly || !isAdmin());
 
 	let tree = $state<Tree | null>(null);
 	let treeLoading = $state(false);
@@ -124,10 +126,12 @@
 			<h1 class="truncate text-[14px] leading-tight font-semibold">{conn.name}</h1>
 			<p class="truncate font-mono text-[11px] text-muted-foreground">{conn.user}@{conn.host}:{conn.port}/{conn.database}</p>
 		</div>
-		<AccessBadge readOnly={conn.readOnly} />
+		<AccessBadge {readOnly} />
 		<div class="ml-auto flex items-center gap-1.5">
 			<button class="btn btn-secondary btn-sm" onclick={() => openQuery()} title="New query (⌘K)"><SquareTerminal />New query</button>
-			<button class="btn btn-ghost btn-icon btn-sm" title="Connection settings" onclick={() => (editor.target = conn)}><Settings2 /></button>
+			{#if isAdmin()}
+				<button class="btn btn-ghost btn-icon btn-sm" title="Connection settings" onclick={() => (editor.target = conn)}><Settings2 /></button>
+			{/if}
 		</div>
 	</header>
 
@@ -171,7 +175,7 @@
 					<!-- Keep tabs mounted so editor state and scroll position survive switching. -->
 					<div class="h-full {t.id === activeId ? '' : 'hidden'}">
 						{#if t.kind === 'overview'}
-							<ServerOverview connectionId={conn.id} readOnly={conn.readOnly} onopen={(s, n) => openTable(s, n)} />
+							<ServerOverview connectionId={conn.id} {readOnly} onopen={(s, n) => openTable(s, n)} />
 						{:else if t.kind === 'table'}
 							<div class="flex h-full flex-col">
 								<div class="flex items-center gap-2 border-b border-border px-3 py-1.5">
@@ -190,7 +194,7 @@
 								</div>
 							</div>
 						{:else}
-							<QueryView connectionId={conn.id} readOnly={conn.readOnly} bind:sql={t.sql} {completion} />
+							<QueryView connectionId={conn.id} {readOnly} bind:sql={t.sql} {completion} />
 						{/if}
 					</div>
 				{/each}

@@ -79,6 +79,12 @@ async function main() {
 			PGM_DATA_DIR: join(tmp, 'data'),
 			PGM_DOCKER_HOSTS: `tcp://127.0.0.1:${DOCKER_PORT}`,
 			PGM_SCAN_PATHS: STACKS,
+			// Only shown on the login and users pages; never contacted.
+			PGM_OIDC_ISSUER: 'https://auth.home.arpa/application/o/pg-modern/',
+			PGM_OIDC_CLIENT_ID: 'pg-modern',
+			PGM_OIDC_NAME: 'Authentik',
+			PGM_OIDC_AUTO_CREATE: '*@home.arpa',
+			PGM_OIDC_ADMIN_EMAILS: 'sam@home.arpa',
 			NODE_OPTIONS: '--disable-warning=ExperimentalWarning'
 		}
 	});
@@ -94,10 +100,12 @@ async function main() {
 		console.log(`  ✓ ${name}.png`);
 	};
 
-	// First run: setup screen.
-	await page.goto(`${APP}/setup`, { waitUntil: 'networkidle' });
-	await shot('setup');
-	await page.request.post(`${APP}/api/auth/setup`, { data: { password: ADMIN_PASSWORD } });
+	// First admin, then the login screen as everyone else sees it.
+	await page.request.post(`${APP}/api/auth/setup`, { data: { email: 'admin', password: ADMIN_PASSWORD } });
+	await page.request.post(`${APP}/api/auth/logout`);
+	await page.goto(`${APP}/login`, { waitUntil: 'networkidle' });
+	await shot('login');
+	await page.request.post(`${APP}/api/auth/login`, { data: { email: 'admin', password: ADMIN_PASSWORD } });
 
 	// Saved connections, as if imported earlier.
 	const api = (method, path, data) => page.request.fetch(`${APP}${path}`, { method, data }).then((r) => r.json());
@@ -145,6 +153,17 @@ async function main() {
 	await page.keyboard.press('Meta+Enter');
 	await page.waitForSelector('text=rolled back');
 	await shot('query');
+
+	for (const u of [
+		{ email: 'sam@home.arpa', name: 'Sam Rivera', role: 'admin' },
+		{ email: 'jo@home.arpa', name: 'Jo Park', role: 'viewer' },
+		{ email: 'kids-tablet@home.arpa', role: 'viewer' }
+	]) {
+		await api('POST', '/api/users', u);
+	}
+	await page.goto(`${APP}/users`, { waitUntil: 'networkidle' });
+	await page.waitForSelector('text=Jo Park');
+	await shot('users');
 
 	await page.goto(`${APP}/`, { waitUntil: 'networkidle' });
 	await page.evaluate(() => localStorage.setItem('pgm-theme', 'light'));

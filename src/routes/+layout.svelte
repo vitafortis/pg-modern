@@ -15,14 +15,15 @@
 		PencilLine,
 		Search,
 		PanelLeftClose,
-		PanelLeftOpen
+		PanelLeftOpen,
+		Users
 	} from '@lucide/svelte';
 	import Logo from '#lib/components/Logo.svelte';
 	import Toaster from '#lib/components/Toaster.svelte';
 	import ConnectionDialog from '#lib/components/ConnectionDialog.svelte';
 	import { api } from '#lib/client/api.ts';
 	import { COLORS } from '#lib/client/format.ts';
-	import { connections, editor, setTheme, theme } from '#lib/client/state.svelte.ts';
+	import { connections, editor, isAdmin, session, setTheme, theme } from '#lib/client/state.svelte.ts';
 	import type { LayoutProps } from './$types';
 
 	let { children, data }: LayoutProps = $props();
@@ -31,6 +32,7 @@
 	$effect.pre(() => {
 		connections.list = data.connections;
 		connections.loaded = true;
+		session.viewer = data.viewer;
 	});
 
 	$effect(() => {
@@ -46,11 +48,16 @@
 		)
 	);
 
-	const nav = [
+	const nav = $derived([
 		{ href: '/', label: 'Overview', icon: LayoutDashboard },
-		{ href: '/discover', label: 'Discover', icon: Radar },
-		{ href: '/settings', label: 'Settings', icon: Settings }
-	];
+		...(isAdmin()
+			? [
+					{ href: '/discover', label: 'Discover', icon: Radar },
+					{ href: '/users', label: 'Users', icon: Users },
+					{ href: '/settings', label: 'Settings', icon: Settings }
+				]
+			: [])
+	]);
 
 	async function logout() {
 		await api.post('/api/auth/logout');
@@ -111,9 +118,11 @@
 				{#if !collapsed}
 					<span class="text-[11px] font-semibold tracking-wider text-muted-foreground/80 uppercase">Connections</span>
 				{/if}
-				<button class="btn btn-ghost btn-icon btn-sm -mr-1.5" title="New connection" onclick={() => (editor.target = 'new')}>
-					<Plus />
-				</button>
+				{#if isAdmin()}
+					<button class="btn btn-ghost btn-icon btn-sm -mr-1.5" title="New connection" onclick={() => (editor.target = 'new')}>
+						<Plus />
+					</button>
+				{/if}
 			</div>
 
 			{#if !collapsed && connections.list.length > 6}
@@ -136,7 +145,7 @@
 						<span class="size-2 shrink-0 rounded-full" style="background:{COLORS[c.color] ?? COLORS.violet}; box-shadow: 0 0 8px {COLORS[c.color] ?? COLORS.violet}"></span>
 						{#if !collapsed}
 							<span class="min-w-0 flex-1 truncate">{c.name}</span>
-							{#if c.readOnly}
+							{#if c.readOnly || !isAdmin()}
 								<Lock class="size-3 shrink-0 opacity-40" />
 							{:else}
 								<PencilLine class="size-3 shrink-0 text-warning" />
@@ -144,17 +153,30 @@
 						{/if}
 					</a>
 				{:else}
-					{#if !collapsed}
+					{#if !collapsed && isAdmin()}
 						<button
 							class="w-full rounded-lg border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground hover:border-primary/50 hover:text-foreground"
 							onclick={() => goto('/discover')}
 						>
 							No connections yet.<br /><span class="text-primary">Discover databases →</span>
 						</button>
+					{:else if !collapsed}
+						<p class="px-3 py-4 text-center text-xs text-muted-foreground">No connections shared yet.</p>
 					{/if}
 				{/each}
 			</div>
 
+			{#if data.viewer && data.auth === 'authenticated' && !collapsed}
+				<div class="flex items-center gap-2.5 border-t border-border px-3 py-2.5">
+					<span class="grid size-7 shrink-0 place-items-center rounded-full bg-primary-soft text-[11px] font-semibold text-primary uppercase">
+						{(data.viewer.name ?? data.viewer.email).slice(0, 1)}
+					</span>
+					<div class="min-w-0 flex-1">
+						<p class="truncate text-[12px] font-medium">{data.viewer.name ?? data.viewer.email}</p>
+						<p class="truncate text-[11px] text-muted-foreground capitalize">{data.viewer.role}</p>
+					</div>
+				</div>
+			{/if}
 			<div class="flex items-center gap-1 border-t border-border p-2 {collapsed ? 'flex-col' : ''}">
 				<button class="btn btn-ghost btn-icon btn-sm" title="Toggle sidebar (⌘B)" onclick={() => (collapsed = !collapsed)}>
 					{#if collapsed}<PanelLeftOpen />{:else}<PanelLeftClose />{/if}

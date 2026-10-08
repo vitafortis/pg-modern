@@ -21,6 +21,7 @@
 - **Browse**: schema tree; filter, sort, page and export tables; inspect JSON cells; view columns, indexes, constraints, foreign keys and triggers.
 - **Query**: SQL editor with schema-aware autocomplete. Run the statement under the cursor (`⌘↵`) or the whole script (`⇧⌘↵`), cancel long queries, keep a per-connection history, and export results to CSV or JSON.
 - **Server overview**: version, size, sessions, cache hit ratio, largest tables, extensions, and whether your role is a superuser.
+- **Users and SSO**: sign in with any OIDC provider (Authentik, Authelia, Keycloak, Pocket ID, Google, …). Accounts can be created automatically for matching emails. *Admins* manage everything; *viewers* can browse and query but are always read-only.
 - **Light and dark** themes, and multi-arch images (`amd64`, `arm64`).
 
 ## Getting started
@@ -34,7 +35,7 @@ curl -fsSLO https://raw.githubusercontent.com/vitafortis/pg-modern/main/compose.
 docker compose up -d
 ```
 
-Open `http://<your-host>:3030` and choose an admin password. Then go to **Discover**:
+Open `http://<your-host>:3030` and create the first admin account. Then go to **Discover**:
 
 1. **Containers** lists every Postgres it found through the Docker API. Use **Running only** and **Reachable only** to cut the noise.
 2. **Files** scans the mounted stacks folder. You can add more folders right there.
@@ -67,6 +68,50 @@ pg·modern connects from inside its own container, so for each database it needs
 
 Discovery probes every address it knows for a server and preselects the first one that answers.
 
+## Users and SSO
+
+pg·modern has two roles:
+
+| | Admin | Viewer |
+| --- | --- | --- |
+| Browse tables, run queries | ✓ | ✓ (always read-only, even on read/write connections) |
+| Add, edit and delete connections | ✓ | |
+| Discover, Settings, Users | ✓ | |
+
+The first account is created on the setup screen. Add more from the **Users** page, or let them sign in through SSO.
+
+### OIDC
+
+Create an OIDC client in your identity provider (confidential, authorization code flow) with this redirect URI:
+
+```
+https://<your pg-modern host>/auth/oidc/callback
+```
+
+Then configure pg·modern:
+
+```yaml
+environment:
+  PGM_OIDC_ISSUER: https://auth.example.com/application/o/pg-modern/
+  PGM_OIDC_CLIENT_ID: pg-modern
+  PGM_OIDC_CLIENT_SECRET: ${PGM_OIDC_CLIENT_SECRET}
+  PGM_OIDC_NAME: Authentik                       # login button label
+  PGM_OIDC_AUTO_CREATE: "*@example.com,friend@gmail.com"
+  PGM_OIDC_ADMIN_EMAILS: you@example.com
+  # PGM_LOCAL_LOGIN: disabled                    # SSO only, once it works
+```
+
+When someone signs in:
+
+1. If their SSO identity is already linked to an account, they're in.
+2. Otherwise, if an admin added their email on the Users page, that account is linked on first login.
+3. Otherwise, if their email matches `PGM_OIDC_AUTO_CREATE`, an account is created: admin when they also match `PGM_OIDC_ADMIN_EMAILS`, otherwise `PGM_OIDC_DEFAULT_ROLE` (viewer).
+4. Anyone else is turned away.
+
+Emails the provider marks as unverified are rejected. An email that's already linked to one SSO identity can't be claimed by another. The flow uses PKCE, state and nonce. Disabling a user or changing their role signs them out immediately.
+
+Behind a reverse proxy, set `PROTOCOL_HEADER` and `HOST_HEADER` so the callback URL is built with your public address, or set `PGM_OIDC_REDIRECT_URI` explicitly. **Settings → Single sign-on** shows the exact redirect URI pg·modern expects.
+
 ## Images
 
 Images are published to the GitHub Container Registry for `linux/amd64` and `linux/arm64`:
@@ -89,8 +134,10 @@ To build it yourself: `docker build -t pg-modern .`
 | **Browse**: virtualized grid with a JSON cell inspector | **Query**: runs in a read-only transaction that is rolled back |
 | ![Structure](docs/screenshots/structure.png) | ![Server overview](docs/screenshots/server.png) |
 | **Structure**: columns, indexes, constraints | **Server overview** |
-| ![Light theme](docs/screenshots/overview-light.png) | ![First-run setup](docs/screenshots/setup.png) |
-| **Light theme** | **First run** |
+| ![Users](docs/screenshots/users.png) | ![Sign in](docs/screenshots/login.png) |
+| **Users**: admins and read-only viewers | **Sign in**: SSO or password |
+| ![Light theme](docs/screenshots/overview-light.png) | |
+| **Light theme** | |
 
 ## Configuration
 
@@ -104,6 +151,15 @@ To build it yourself: `docker build -t pg-modern .`
 | `PGM_STATEMENT_TIMEOUT_MS` | `30000` | Per-statement timeout |
 | `PGM_MAX_ROWS` | `5000` | Rows returned per result; the rest are truncated |
 | `PGM_AUTH` | — | `disabled` skips the login screen (trusted networks only) |
+| `PGM_LOCAL_LOGIN` | — | `disabled` hides the email/password form (SSO only) |
+| `PGM_OIDC_ISSUER` | — | OIDC issuer URL; enables SSO |
+| `PGM_OIDC_CLIENT_ID`, `PGM_OIDC_CLIENT_SECRET` | — | Client credentials from your identity provider |
+| `PGM_OIDC_NAME` | `SSO` | Login button label |
+| `PGM_OIDC_SCOPES` | `openid email profile` | Requested scopes |
+| `PGM_OIDC_AUTO_CREATE` | — | Emails that get an account on first login: `*@example.com`, `bob@gmail.com`, `*` |
+| `PGM_OIDC_ADMIN_EMAILS` | — | Auto-created accounts matching these become admins |
+| `PGM_OIDC_DEFAULT_ROLE` | `viewer` | Role for other auto-created accounts |
+| `PGM_OIDC_REDIRECT_URI` | `<origin>/auth/oidc/callback` | Override when the public URL can't be inferred |
 | `PROTOCOL_HEADER`, `HOST_HEADER` | — | Set to `x-forwarded-proto` / `x-forwarded-host` behind a TLS reverse proxy |
 
 ## How discovery works
@@ -136,7 +192,7 @@ Scan results stay on the server, and an import refers to them by key, so a disco
 
   For the strongest guarantee, also connect as a role that only has `pg_read_all_data`.
 - **Writable connections** confirm `DROP`, `TRUNCATE`, and `DELETE` / `UPDATE` without a `WHERE`.
-- **The app** sits behind an admin password: scrypt-hashed, with httpOnly `SameSite=Strict` cookies and a login throttle. Cross-origin API writes are rejected.
+- **Sign-in** is by OIDC or by local accounts (scrypt-hashed passwords, login throttle). Sessions are httpOnly cookies tied to a user. Cross-origin API writes are rejected. Viewers are forced read-only on the server, not just hidden from buttons in the UI.
 
 ## Development
 

@@ -1,5 +1,5 @@
 import { api } from './api.ts';
-import type { Connection } from '#lib/types.ts';
+import type { Connection, Viewer } from '#lib/types.ts';
 
 type Toast = { id: number; kind: 'info' | 'success' | 'error'; title: string; body?: string };
 
@@ -37,3 +37,8 @@ export function setTheme(value: 'dark' | 'light') {
 
 /** Connection form dialog: `null` closed, `'new'` create, or the connection being edited. */
 export const editor = $state<{ target: Connection | 'new' | null }>({ target: null });
+
+/** The signed-in user; set by the root layout. */
+export const session = $state<{ viewer: Viewer | null }>({ viewer: null });
+
+export const isAdmin = () => session.viewer?.role === 'admin';

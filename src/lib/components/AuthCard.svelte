@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { LoaderCircle } from '@lucide/svelte';
+	import { KeyRound, LoaderCircle } from '@lucide/svelte';
 	import Logo from './Logo.svelte';
 
 	let {
@@ -7,19 +7,32 @@
 		subtitle,
 		cta,
 		confirm = false,
+		showForm = true,
+		sso,
+		error: initialError = '',
 		onsubmit
 	}: {
 		title: string;
 		subtitle: string;
 		cta: string;
 		confirm?: boolean;
-		onsubmit: (password: string) => Promise<string | void>;
+		/** False hides the email/password form (SSO-only). */
+		showForm?: boolean;
+		/** SSO button: label and start URL. */
+		sso?: { name: string; href: string } | null;
+		error?: string;
+		onsubmit: (email: string, password: string) => Promise<string | void>;
 	} = $props();
 
+	let email = $state('');
 	let password = $state('');
 	let repeat = $state('');
 	let error = $state('');
 	let busy = $state(false);
+
+	$effect(() => {
+		error = initialError;
+	});
 
 	async function submit(e: SubmitEvent) {
 		e.preventDefault();
@@ -29,7 +42,7 @@
 			return;
 		}
 		busy = true;
-		error = (await onsubmit(password)) ?? '';
+		error = (await onsubmit(email, password)) ?? '';
 		busy = false;
 	}
 </script>
@@ -38,22 +51,38 @@
 	<div class="dot-grid mask-fade pointer-events-none absolute inset-0 opacity-70"></div>
 	<div class="glow-top pointer-events-none absolute inset-x-0 top-0 h-[480px]"></div>
 
-	<form onsubmit={submit} class="card relative w-full max-w-sm p-7 shadow-surface-lg">
+	<div class="card relative w-full max-w-sm p-7 shadow-surface-lg">
 		<div class="mb-6 flex flex-col items-center text-center">
 			<Logo size={44} />
 			<h1 class="mt-4 text-lg font-semibold tracking-tight">{title}</h1>
 			<p class="mt-1 text-[13px] text-muted-foreground">{subtitle}</p>
 		</div>
-		<label class="label" for="pw">Password</label>
-		<!-- svelte-ignore a11y_autofocus -->
-		<input id="pw" class="input" type="password" autocomplete={confirm ? 'new-password' : 'current-password'} autofocus bind:value={password} required />
-		{#if confirm}
-			<label class="label mt-3" for="pw2">Repeat password</label>
-			<input id="pw2" class="input" type="password" autocomplete="new-password" bind:value={repeat} required />
+
+		{#if sso}
+			<a class="btn btn-primary h-9 w-full" href={sso.href} data-sveltekit-reload><KeyRound />Continue with {sso.name}</a>
+			{#if showForm}
+				<div class="my-5 flex items-center gap-3 text-[11px] text-muted-foreground">
+					<span class="h-px flex-1 bg-border"></span>or<span class="h-px flex-1 bg-border"></span>
+				</div>
+			{/if}
 		{/if}
-		{#if error}<p class="mt-3 text-xs text-danger">{error}</p>{/if}
-		<button class="btn btn-primary mt-5 h-9 w-full" disabled={busy}>
-			{#if busy}<LoaderCircle class="animate-spin" />{/if}{cta}
-		</button>
-	</form>
+
+		{#if showForm}
+			<form onsubmit={submit}>
+				<label class="label" for="email">Email or username</label>
+				<!-- svelte-ignore a11y_autofocus -->
+				<input id="email" class="input" autocomplete="username" autofocus={!sso} bind:value={email} required />
+				<label class="label mt-3" for="pw">Password</label>
+				<input id="pw" class="input" type="password" autocomplete={confirm ? 'new-password' : 'current-password'} bind:value={password} required />
+				{#if confirm}
+					<label class="label mt-3" for="pw2">Repeat password</label>
+					<input id="pw2" class="input" type="password" autocomplete="new-password" bind:value={repeat} required />
+				{/if}
+				<button class="btn mt-5 h-9 w-full {sso ? 'btn-secondary' : 'btn-primary'}" disabled={busy}>
+					{#if busy}<LoaderCircle class="animate-spin" />{/if}{cta}
+				</button>
+			</form>
+		{/if}
+		{#if error}<p class="mt-3 text-center text-xs text-danger">{error}</p>{/if}
+	</div>
 </div>

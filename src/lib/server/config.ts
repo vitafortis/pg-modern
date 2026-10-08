@@ -34,6 +34,25 @@ export const config = {
 	/** Folders to scan for .env / compose files, in addition to ones saved in settings. */
 	scanPaths: list(process.env.PGM_SCAN_PATHS),
 	scanDepth: Number(process.env.PGM_SCAN_DEPTH ?? 6),
+	/** `disabled` hides the email/password form (SSO only). */
+	localLoginDisabled: process.env.PGM_LOCAL_LOGIN === 'disabled',
+	oidc: process.env.PGM_OIDC_ISSUER
+		? {
+				issuer: process.env.PGM_OIDC_ISSUER,
+				clientId: process.env.PGM_OIDC_CLIENT_ID ?? '',
+				clientSecret: process.env.PGM_OIDC_CLIENT_SECRET,
+				/** Label on the login button. */
+				name: process.env.PGM_OIDC_NAME ?? 'SSO',
+				scopes: process.env.PGM_OIDC_SCOPES ?? 'openid email profile',
+				/** Override when the public URL can't be inferred (defaults to <origin>/auth/oidc/callback). */
+				redirectUri: process.env.PGM_OIDC_REDIRECT_URI,
+				/** Email patterns that may create an account on first login, e.g. `*@example.com`. */
+				autoCreate: list(process.env.PGM_OIDC_AUTO_CREATE),
+				/** Email patterns that get the admin role when auto-created. */
+				adminEmails: list(process.env.PGM_OIDC_ADMIN_EMAILS),
+				defaultRole: process.env.PGM_OIDC_DEFAULT_ROLE === 'admin' ? ('admin' as const) : ('viewer' as const)
+			}
+		: undefined,
 	statementTimeoutMs: Number(process.env.PGM_STATEMENT_TIMEOUT_MS ?? 30_000),
 	maxRows: Number(process.env.PGM_MAX_ROWS ?? 5_000)
 };

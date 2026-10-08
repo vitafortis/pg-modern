@@ -7,6 +7,7 @@ declare global {
 		}
 		interface Locals {
 			auth: import('#lib/server/auth.ts').AuthState;
+			user: import('#lib/types.ts').User | null;
 		}
 	}
 }

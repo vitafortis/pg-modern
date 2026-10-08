@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { FolderSearch, KeyRound, Container, Plus, Save, ShieldCheck, X, LoaderCircle } from '@lucide/svelte';
+	import { FolderSearch, KeyRound, Container, Plus, Save, ShieldCheck, X, LoaderCircle, Copy, LogIn } from '@lucide/svelte';
 	import PageHeader from '#lib/components/PageHeader.svelte';
 	import { api, errorMessage } from '#lib/client/api.ts';
 	import { toast } from '#lib/client/state.svelte.ts';
@@ -16,6 +16,17 @@
 		keySource: string;
 		authDisabled: boolean;
 		inContainer: boolean;
+		localLoginDisabled: boolean;
+		oidc: {
+			issuer: string;
+			name: string;
+			clientId: string;
+			scopes: string;
+			redirectUri: string;
+			autoCreate: string[];
+			adminEmails: string[];
+			defaultRole: string;
+		} | null;
 	};
 
 	let settings = $state<Settings>({ scanPaths: [], dockerHosts: [] });
@@ -102,6 +113,36 @@
 				<input class="input h-8 font-mono text-xs" placeholder="tcp://10.0.0.5:2375" bind:value={newHost} />
 				<button class="btn btn-secondary" disabled={!newHost.trim()}><Plus />Add</button>
 			</form>
+		</section>
+
+		<section class="card p-5 lg:col-span-2">
+			<h2 class="flex items-center gap-2 text-[14px] font-semibold"><LogIn class="size-4 text-primary" />Single sign-on (OIDC)</h2>
+			{#if env?.oidc}
+				{@const o = env.oidc}
+				<div class="mt-4 grid gap-x-8 gap-y-3 text-[13px] md:grid-cols-2">
+					<div class="flex items-center justify-between gap-4"><span class="text-muted-foreground">Provider</span><span class="truncate font-mono text-xs">{o.issuer}</span></div>
+					<div class="flex items-center justify-between gap-4"><span class="text-muted-foreground">Client ID</span><span class="truncate font-mono text-xs">{o.clientId}</span></div>
+					<div class="flex items-center justify-between gap-4 md:col-span-2">
+						<span class="shrink-0 text-muted-foreground">Redirect URI <span class="text-[11px]">(register this with your provider)</span></span>
+						<span class="flex min-w-0 items-center gap-1">
+							<code class="truncate font-mono text-xs">{o.redirectUri}</code>
+							<button class="btn btn-ghost btn-icon btn-sm" title="Copy" onclick={() => (navigator.clipboard.writeText(o.redirectUri), toast('success', 'Copied'))}><Copy /></button>
+						</span>
+					</div>
+					<div class="flex items-center justify-between gap-4"><span class="text-muted-foreground">Auto-create accounts for</span><span class="truncate font-mono text-xs">{o.autoCreate.join(', ') || 'nobody (invite only)'}</span></div>
+					<div class="flex items-center justify-between gap-4"><span class="text-muted-foreground">Auto-created role</span><span class="font-mono text-xs">{o.defaultRole}{#if o.adminEmails.length} · admin for {o.adminEmails.join(', ')}{/if}</span></div>
+					<div class="flex items-center justify-between gap-4"><span class="text-muted-foreground">Password sign-in</span>{#if env.localLoginDisabled}<span class="badge">disabled</span>{:else}<span class="badge badge-success">enabled</span>{/if}</div>
+				</div>
+			{:else if env}
+				<p class="mt-1 text-xs text-muted-foreground">Sign in through Authentik, Authelia, Keycloak, Pocket ID, Google and other OIDC providers. Set these variables and restart:</p>
+				<pre class="mt-3 overflow-x-auto rounded-lg border border-border bg-surface p-3 font-mono text-[11px] leading-relaxed">PGM_OIDC_ISSUER=https://auth.example.com/application/o/pg-modern/
+PGM_OIDC_CLIENT_ID=pg-modern
+PGM_OIDC_CLIENT_SECRET=…
+PGM_OIDC_NAME=Authentik                # login button label
+PGM_OIDC_AUTO_CREATE=*@example.com     # optional: who gets an account on first login
+PGM_OIDC_ADMIN_EMAILS=you@example.com  # optional: who is created as admin</pre>
+				<p class="mt-2 text-[11px] text-muted-foreground">Redirect URI to register: <code class="font-mono">{location.origin}/auth/oidc/callback</code></p>
+			{/if}
 		</section>
 
 		<section class="card p-5 lg:col-span-2">

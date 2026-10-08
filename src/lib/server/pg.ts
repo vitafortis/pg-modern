@@ -289,13 +289,18 @@ const running = new Map<string, number>();
  * Executes a script statement by statement. Read-only connections run all of it in
  * a single READ ONLY transaction that is rolled back afterwards.
  */
-export async function runScript(id: string, script: string, opts: { runId?: string; maxRows?: number } = {}): Promise<ScriptOutcome> {
+export async function runScript(
+	id: string,
+	script: string,
+	opts: { runId?: string; maxRows?: number; /** Viewers: read-only even on writable connections. */ forceReadOnly?: boolean } = {}
+): Promise<ScriptOutcome> {
 	const statements = splitStatements(script);
 	const maxRows = Math.min(opts.maxRows ?? config.maxRows, config.maxRows);
 	const conn = getConnection(id);
 	if (!conn) throw new NotFound('Connection not found');
+	const readOnly = conn.readOnly || !!opts.forceReadOnly;
 
-	if (conn.readOnly) {
+	if (readOnly) {
 		const blocked = statements.findIndex(escapesReadOnly);
 		if (blocked !== -1) {
 			return {
@@ -310,14 +315,14 @@ export async function runScript(id: string, script: string, opts: { runId?: stri
 		}
 	}
 
-	return withClient(id, { readOnly: conn.readOnly }, async (client, entry) => {
+	return withClient(id, { readOnly }, async (client, entry) => {
 		const outcome: ScriptOutcome = { results: [] };
 		const pid = (client as unknown as { processID?: number }).processID;
 		if (opts.runId && pid) running.set(opts.runId, pid);
 		try {
 			for (let i = 0; i < statements.length; i++) {
 				try {
-					const result = await runStatement(client, entry, statements[i], conn.readOnly, maxRows);
+					const result = await runStatement(client, entry, statements[i], readOnly, maxRows);
 					outcome.results.push({ ...result, sql: statements[i] });
 				} catch (err) {
 					outcome.error = { ...toQueryError(err), statementIndex: i, sql: statements[i] };

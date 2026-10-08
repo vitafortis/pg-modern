@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { config } from './config.ts';
 import { decrypt, encrypt } from './crypto.ts';
-import type { Connection, ConnectionInput, HistoryEntry, Settings } from '#lib/types.ts';
+import type { Connection, ConnectionInput, HistoryEntry, Role, Settings, User } from '#lib/types.ts';
 
 let handle: DatabaseSync | undefined;
 
@@ -41,9 +41,16 @@ function db(): DatabaseSync {
 			last_connected_at TEXT
 		);
 
-		CREATE TABLE IF NOT EXISTS sessions (
-			token_hash TEXT PRIMARY KEY,
-			expires_at INTEGER NOT NULL
+		CREATE TABLE IF NOT EXISTS users (
+			id TEXT PRIMARY KEY,
+			email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+			name TEXT,
+			role TEXT NOT NULL DEFAULT 'viewer',
+			password_hash TEXT,
+			oidc_sub TEXT UNIQUE,
+			disabled INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			last_login_at TEXT
 		);
 
 		CREATE TABLE IF NOT EXISTS kv (
@@ -63,7 +70,31 @@ function db(): DatabaseSync {
 		);
 		CREATE INDEX IF NOT EXISTS history_conn ON history(connection_id, id DESC);
 	`);
+	migrate(handle);
 	return handle;
+}
+
+function migrate(h: DatabaseSync) {
+	// v1 sessions weren't tied to a user; drop them (everyone signs in again once).
+	const cols = h.prepare(`SELECT name FROM pragma_table_info('sessions')`).all() as { name: string }[];
+	if (cols.length && !cols.some((c) => c.name === 'user_id')) h.exec('DROP TABLE sessions');
+	h.exec(`
+		CREATE TABLE IF NOT EXISTS sessions (
+			token_hash TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			expires_at INTEGER NOT NULL
+		);
+	`);
+
+	// v1 had a single admin password; it becomes the local user "admin".
+	const legacy = h.prepare(`SELECT value FROM kv WHERE key = 'admin_password'`).get() as Row | undefined;
+	const hasUsers = (h.prepare('SELECT count(*) AS n FROM users').get() as { n: number }).n > 0;
+	if (legacy && !hasUsers) {
+		h.prepare(
+			`INSERT INTO users (id, email, name, role, password_hash, created_at) VALUES (?, 'admin', 'Admin', 'admin', ?, ?)`
+		).run(randomUUID(), JSON.parse(legacy.value as string), new Date().toISOString());
+	}
+	if (legacy) h.prepare(`DELETE FROM kv WHERE key = 'admin_password'`).run();
 }
 
 type Row = Record<string, unknown>;
@@ -186,32 +217,108 @@ export function saveSettings(settings: Settings) {
 	setKv('settings', settings);
 }
 
-export function getAdminPasswordHash(): string | undefined {
-	return getKv<string | undefined>('admin_password', undefined);
+// --- users -------------------------------------------------------------------
+
+function toUser(r: Row): User {
+	return {
+		id: r.id as string,
+		email: r.email as string,
+		name: (r.name as string) ?? null,
+		role: r.role as Role,
+		hasPassword: r.password_hash != null,
+		sso: r.oidc_sub != null,
+		disabled: r.disabled === 1,
+		createdAt: r.created_at as string,
+		lastLoginAt: (r.last_login_at as string) ?? null
+	};
 }
 
-export function setAdminPasswordHash(hash: string) {
-	setKv('admin_password', hash);
+export function countUsers(): number {
+	return (db().prepare('SELECT count(*) AS n FROM users').get() as { n: number }).n;
+}
+
+export function countAdmins(): number {
+	return (db().prepare(`SELECT count(*) AS n FROM users WHERE role = 'admin' AND disabled = 0`).get() as { n: number }).n;
+}
+
+export function listUsers(): User[] {
+	return (db().prepare('SELECT * FROM users ORDER BY email').all() as Row[]).map(toUser);
+}
+
+export function getUser(id: string): User | undefined {
+	const row = db().prepare('SELECT * FROM users WHERE id = ?').get(id) as Row | undefined;
+	return row && toUser(row);
+}
+
+export function findUserByEmail(email: string): User | undefined {
+	const row = db().prepare('SELECT * FROM users WHERE email = ?').get(email.trim()) as Row | undefined;
+	return row && toUser(row);
+}
+
+export function findUserBySub(sub: string): User | undefined {
+	const row = db().prepare('SELECT * FROM users WHERE oidc_sub = ?').get(sub) as Row | undefined;
+	return row && toUser(row);
+}
+
+export function getPasswordHash(userId: string): string | undefined {
+	const row = db().prepare('SELECT password_hash FROM users WHERE id = ?').get(userId) as Row | undefined;
+	return (row?.password_hash as string) ?? undefined;
+}
+
+export function createUser(input: { email: string; name?: string | null; role: Role; passwordHash?: string; oidcSub?: string }): User {
+	const id = randomUUID();
+	db()
+		.prepare('INSERT INTO users (id, email, name, role, password_hash, oidc_sub, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+		.run(id, input.email.trim(), input.name ?? null, input.role, input.passwordHash ?? null, input.oidcSub ?? null, new Date().toISOString());
+	return getUser(id)!;
+}
+
+export function updateUser(id: string, patch: { role?: Role; disabled?: boolean; name?: string | null; passwordHash?: string | null; oidcSub?: string }) {
+	const sets: string[] = [];
+	const values: (string | number | null)[] = [];
+	if (patch.role !== undefined) sets.push('role = ?'), values.push(patch.role);
+	if (patch.disabled !== undefined) sets.push('disabled = ?'), values.push(patch.disabled ? 1 : 0);
+	if (patch.name !== undefined) sets.push('name = ?'), values.push(patch.name);
+	if (patch.passwordHash !== undefined) sets.push('password_hash = ?'), values.push(patch.passwordHash);
+	if (patch.oidcSub !== undefined) sets.push('oidc_sub = ?'), values.push(patch.oidcSub);
+	if (!sets.length) return getUser(id);
+	db().prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...values, id);
+	if (patch.disabled || patch.role) deleteUserSessions(id); // take effect immediately
+	return getUser(id);
+}
+
+export function touchUserLogin(id: string) {
+	db().prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(new Date().toISOString(), id);
+}
+
+export function deleteUser(id: string): boolean {
+	return Number(db().prepare('DELETE FROM users WHERE id = ?').run(id).changes) > 0;
 }
 
 // --- sessions ----------------------------------------------------------------
 
-export function createSession(tokenHash: string, ttlMs: number) {
+export function createSession(tokenHash: string, userId: string, ttlMs: number) {
 	db().prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
-	db().prepare('INSERT INTO sessions (token_hash, expires_at) VALUES (?, ?)').run(tokenHash, Date.now() + ttlMs);
+	db().prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)').run(tokenHash, userId, Date.now() + ttlMs);
 }
 
-export function sessionValid(tokenHash: string): boolean {
-	const row = db().prepare('SELECT expires_at FROM sessions WHERE token_hash = ?').get(tokenHash) as Row | undefined;
-	return !!row && (row.expires_at as number) > Date.now();
+/** The signed-in user for a session token, if the session is live and the user enabled. */
+export function sessionUser(tokenHash: string): User | undefined {
+	const row = db()
+		.prepare(
+			`SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
+			 WHERE s.token_hash = ? AND s.expires_at > ? AND u.disabled = 0`
+		)
+		.get(tokenHash, Date.now()) as Row | undefined;
+	return row && toUser(row);
 }
 
 export function deleteSession(tokenHash: string) {
 	db().prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenHash);
 }
 
-export function deleteAllSessions() {
-	db().prepare('DELETE FROM sessions').run();
+export function deleteUserSessions(userId: string) {
+	db().prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
 }
 
 // --- history -----------------------------------------------------------------

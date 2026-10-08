@@ -4,11 +4,14 @@ import { runScript } from '#lib/server/pg.ts';
 import { addHistory } from '#lib/server/store.ts';
 import type { RequestHandler } from './$types';
 
-export const POST: RequestHandler = handler(async ({ params, request }) => {
+export const POST: RequestHandler = handler(async ({ params, request, locals }) => {
 	const { sql, runId } = await request.json();
 	if (typeof sql !== 'string' || !sql.trim()) throw new BadRequest('"sql" is required');
 	const started = performance.now();
-	const outcome = await runScript(params.id, sql, { runId: typeof runId === 'string' ? runId : undefined });
+	const outcome = await runScript(params.id, sql, {
+		runId: typeof runId === 'string' ? runId : undefined,
+		forceReadOnly: locals.user?.role !== 'admin'
+	});
 	const last = outcome.results.at(-1);
 	addHistory({
 		connectionId: params.id,

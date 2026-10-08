@@ -145,3 +145,26 @@ export interface Settings {
 	scanPaths: string[];
 	dockerHosts: string[];
 }
+
+export type Role = 'admin' | 'viewer';
+
+export interface User {
+	id: string;
+	email: string;
+	name: string | null;
+	role: Role;
+	/** Has a local password (can use the password form). */
+	hasPassword: boolean;
+	/** Linked to an SSO identity. */
+	sso: boolean;
+	disabled: boolean;
+	createdAt: string;
+	lastLoginAt: string | null;
+}
+
+/** What the browser knows about the current session. */
+export interface Viewer {
+	email: string;
+	name: string | null;
+	role: Role;
+}

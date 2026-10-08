@@ -3,13 +3,20 @@
 	import { goto, invalidateAll } from '$app/navigation';
 	import AuthCard from '#lib/components/AuthCard.svelte';
 	import { api, errorMessage } from '#lib/client/api.ts';
+	import type { PageProps } from './$types';
 
-	async function login(password: string) {
+	let { data }: PageProps = $props();
+
+	const next = $derived.by(() => {
+		const n = page.url.searchParams.get('next');
+		return n?.startsWith('/') && !n.startsWith('//') ? n : '/';
+	});
+
+	async function login(email: string, password: string) {
 		try {
-			await api.post('/api/auth/login', { password });
-			const next = page.url.searchParams.get('next');
+			await api.post('/api/auth/login', { email, password });
 			await invalidateAll();
-			goto(next?.startsWith('/') && !next.startsWith('//') ? next : '/');
+			goto(next);
 		} catch (err) {
 			return errorMessage(err);
 		}
@@ -18,4 +25,12 @@
 
 <svelte:head><title>Sign in · pg·modern</title></svelte:head>
 
-<AuthCard title="Welcome back" subtitle="Sign in to your database console." cta="Sign in" onsubmit={login} />
+<AuthCard
+	title="Welcome back"
+	subtitle="Sign in to your database console."
+	cta="Sign in"
+	showForm={data.localLogin}
+	sso={data.sso ? { name: data.sso.name, href: `/auth/oidc/start?next=${encodeURIComponent(next)}` } : null}
+	error={data.error}
+	onsubmit={login}
+/>

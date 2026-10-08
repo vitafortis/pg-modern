@@ -3,9 +3,9 @@
 	import AuthCard from '#lib/components/AuthCard.svelte';
 	import { api, errorMessage } from '#lib/client/api.ts';
 
-	async function setup(password: string) {
+	async function setup(email: string, password: string) {
 		try {
-			await api.post('/api/auth/setup', { password });
+			await api.post('/api/auth/setup', { email, password });
 			await invalidateAll();
 			goto('/discover');
 		} catch (err) {
@@ -18,8 +18,8 @@
 
 <AuthCard
 	title="Set up pg·modern"
-	subtitle="Choose an admin password. It guards every stored credential."
-	cta="Create password"
+	subtitle="Create the first admin account. It guards every stored credential."
+	cta="Create admin"
 	confirm
 	onsubmit={setup}
 />

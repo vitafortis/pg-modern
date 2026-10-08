@@ -18,7 +18,14 @@ services:
       # Optional: manage the credential encryption key yourself.
       # Otherwise a random key is generated at /data/secret.key — back it up.
       # PGM_SECRET_KEY: change-me-to-a-long-random-string
-      # Behind a TLS reverse proxy, uncomment so secure cookies work:
+      # Optional single sign-on (see README → Users and SSO):
+      # PGM_OIDC_ISSUER: https://auth.example.com/application/o/pg-modern/
+      # PGM_OIDC_CLIENT_ID: pg-modern
+      # PGM_OIDC_CLIENT_SECRET: ${PGM_OIDC_CLIENT_SECRET}
+      # PGM_OIDC_NAME: Authentik
+      # PGM_OIDC_AUTO_CREATE: "*@example.com"
+      # PGM_OIDC_ADMIN_EMAILS: you@example.com
+      # Behind a TLS reverse proxy, uncomment so secure cookies and SSO callbacks work:
       # PROTOCOL_HEADER: x-forwarded-proto
       # HOST_HEADER: x-forwarded-host
     volumes:

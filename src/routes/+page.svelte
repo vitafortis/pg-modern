@@ -17,7 +17,7 @@
 	import SourceBadge from '#lib/components/SourceBadge.svelte';
 	import { api } from '#lib/client/api.ts';
 	import { ago, COLORS } from '#lib/client/format.ts';
-	import { connections, editor } from '#lib/client/state.svelte.ts';
+	import { connections, editor, isAdmin } from '#lib/client/state.svelte.ts';
 	import type { QueryError } from '#lib/types.ts';
 
 	type Status = { state: 'checking' } | { state: 'up'; latencyMs: number; version: string } | { state: 'down'; error: string };
@@ -62,8 +62,10 @@
 	<PageHeader title="Overview" description="Every Postgres in your homelab, in one place.">
 		{#snippet actions()}
 			<button class="btn btn-secondary" onclick={checkAll}><RefreshCw />Check all</button>
-			<a class="btn btn-secondary" href="/discover"><Radar />Discover</a>
-			<button class="btn btn-primary" onclick={() => (editor.target = 'new')}><Plus />New connection</button>
+			{#if isAdmin()}
+				<a class="btn btn-secondary" href="/discover"><Radar />Discover</a>
+				<button class="btn btn-primary" onclick={() => (editor.target = 'new')}><Plus />New connection</button>
+			{/if}
 		{/snippet}
 	</PageHeader>
 
@@ -92,10 +94,14 @@
 						Scan your Docker hosts and project folders for Postgres credentials, or add a connection by hand. New
 						connections are read-only by default.
 					</p>
-					<div class="mt-6 flex justify-center gap-2">
-						<a class="btn btn-primary" href="/discover"><Radar />Discover databases</a>
-						<button class="btn btn-secondary" onclick={() => (editor.target = 'new')}><Plus />Add manually</button>
-					</div>
+					{#if isAdmin()}
+						<div class="mt-6 flex justify-center gap-2">
+							<a class="btn btn-primary" href="/discover"><Radar />Discover databases</a>
+							<button class="btn btn-secondary" onclick={() => (editor.target = 'new')}><Plus />Add manually</button>
+						</div>
+					{:else}
+						<p class="mt-4 text-xs text-muted-foreground">Ask an admin to add connections.</p>
+					{/if}
 				</div>
 			</div>
 		{:else}
@@ -127,7 +133,7 @@
 								</div>
 							</div>
 							<div class="mt-4 flex flex-wrap items-center gap-1.5">
-								<AccessBadge readOnly={c.readOnly} />
+								<AccessBadge readOnly={c.readOnly || !isAdmin()} />
 								<SourceBadge source={c.source} />
 								{#if s?.state === 'up'}
 									<span class="badge font-mono">pg {s.version}</span>
@@ -140,9 +146,11 @@
 						</a>
 						<div class="relative flex items-center justify-between border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
 							<span>Last used {ago(c.lastConnectedAt)}</span>
-							<button class="btn btn-ghost btn-sm -mr-2 opacity-0 group-hover:opacity-100 focus:opacity-100" onclick={() => (editor.target = c)}>
-								<Settings2 />Edit
-							</button>
+							{#if isAdmin()}
+								<button class="btn btn-ghost btn-sm -mr-2 opacity-0 group-hover:opacity-100 focus:opacity-100" onclick={() => (editor.target = c)}>
+									<Settings2 />Edit
+								</button>
+							{/if}
 						</div>
 					</div>
 				{/each}
