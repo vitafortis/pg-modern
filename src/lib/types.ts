@@ -1,6 +1,6 @@
 export type SslMode = 'disable' | 'prefer' | 'require' | 'verify-full';
 
-export type SourceKind = 'manual' | 'docker' | 'env';
+export type SourceKind = 'manual' | 'docker' | 'env' | 'arcane';
 
 export interface ConnectionSource {
 	kind: SourceKind;
@@ -141,9 +141,35 @@ export interface HistoryEntry {
 	createdAt: string;
 }
 
+export type ManagerKind = 'arcane';
+
+/** A Docker management UI whose API can list stacks (compose + .env) across hosts. */
+export interface Manager {
+	id: string;
+	kind: ManagerKind;
+	name: string;
+	url: string;
+	hasKey: boolean;
+	/** Set via environment variables; can't be edited in the UI. */
+	fromEnv?: boolean;
+}
+
+export interface ManagerScan {
+	manager: Manager;
+	error?: string;
+	environments: {
+		id: string;
+		name: string;
+		host: string;
+		error?: string;
+		projects: { id: string; name: string; status: string; candidates: Candidate[] }[];
+	}[];
+}
+
 export interface Settings {
 	scanPaths: string[];
 	dockerHosts: string[];
+	managers?: Omit<Manager, 'hasKey' | 'fromEnv'>[];
 }
 
 export type Role = 'admin' | 'viewer';

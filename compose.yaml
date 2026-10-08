@@ -15,6 +15,10 @@ services:
       PGM_DOCKER_HOSTS: tcp://docker-proxy:2375
       # Folders mounted below that get scanned for .env / compose files.
       PGM_SCAN_PATHS: /stacks
+      # Using Arcane? Read its projects over the API instead of mounting folders
+      # (key permissions: environments:list, projects:list, projects:read):
+      # PGM_ARCANE_URL: https://arcane.home.arpa
+      # PGM_ARCANE_API_KEY: ${PGM_ARCANE_API_KEY}
       # Optional: manage the credential encryption key yourself.
       # Otherwise a random key is generated at /data/secret.key — back it up.
       # PGM_SECRET_KEY: change-me-to-a-long-random-string

@@ -12,7 +12,7 @@ const ADMIN_PAGES = ['/discover', '/settings', '/users'];
  * read-only, enforced in the query route) but not change anything.
  */
 function adminOnlyApi(method: string, path: string): boolean {
-	if (/^\/api\/(discover|settings|users)(\/|$)/.test(path)) return true;
+	if (/^\/api\/(discover|settings|users|managers)(\/|$)/.test(path)) return true;
 	if (path === '/api/connections') return method !== 'GET';
 	if (path === '/api/connections/test') return true;
 	if (/^\/api\/connections\/[^/]+$/.test(path)) return method !== 'GET';

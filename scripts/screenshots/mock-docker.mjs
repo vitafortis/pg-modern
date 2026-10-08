@@ -84,3 +84,68 @@ export function startMockDocker({ port, dbPort, user, password }) {
 	});
 	return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve(server)));
 }
+
+// A stand-in for Arcane's API (environments → projects → compose/.env content).
+export function startMockArcane({ port, dbPort, user, password }) {
+	const environments = [
+		{ id: '0', name: 'Local Docker', apiUrl: 'http://localhost:3552', status: 'online', enabled: true },
+		{ id: 'e1', name: 'nas', apiUrl: 'http://nas.home.arpa:3553', status: 'online', enabled: true }
+	];
+	const pg = (db) => `services:
+  server:
+    image: ghcr.io/example/${db}:latest
+    env_file: .env
+    environment:
+      DB_HOST: postgres
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: \${DB_USER}
+      POSTGRES_PASSWORD: \${DB_PASSWORD}
+      POSTGRES_DB: ${db}
+    ports:
+      - "${dbPort}:5432"
+`;
+	const env = `DB_USER=${user}\nDB_PASSWORD=${password}\n`;
+	const projects = {
+		'0': [
+			{ id: 'p1', name: 'immich', status: 'running', composeContent: pg('immich'), envContent: env },
+			{ id: 'p2', name: 'outline', status: 'running', composeContent: pg('gitea'), envContent: env }
+		],
+		e1: [
+			{
+				id: 'p3',
+				name: 'vaultwarden',
+				status: 'running',
+				composeContent: 'services:\n  vaultwarden:\n    image: vaultwarden/server\n    env_file: .env\n',
+				envContent: 'DATABASE_URL=postgresql://vaultwarden:changeme@pg.home.arpa:5432/vaultwarden\n'
+			},
+			{
+				id: 'p4',
+				name: 'paperless',
+				status: 'stopped',
+				composeContent:
+					'services:\n  db:\n    image: postgres:16\n    environment:\n      POSTGRES_USER: paperless\n      POSTGRES_PASSWORD: paperless\n    ports:\n      - "5433:5432"\n',
+				envContent: ''
+			}
+		]
+	};
+	const server = createServer((req, res) => {
+		const send = (body, status = 200) => {
+			res.writeHead(status, { 'content-type': 'application/json' });
+			res.end(JSON.stringify(body));
+		};
+		const path = new URL(req.url, 'http://arcane').pathname;
+		if (path === '/api/environments') return send({ success: true, data: environments, pagination: { totalItems: environments.length } });
+		let m = /^\/api\/environments\/([^/]+)\/projects$/.exec(path);
+		if (m) {
+			const list = (projects[m[1]] ?? []).map(({ composeContent: _c, envContent: _e, ...p }) => p);
+			return send({ success: true, data: list, pagination: { totalItems: list.length } });
+		}
+		m = /^\/api\/environments\/([^/]+)\/projects\/([^/]+)\/compose$/.exec(path);
+		const p = m && (projects[m[1]] ?? []).find((x) => x.id === m[2]);
+		if (p) return send({ success: true, data: p });
+		send({ error: 'not found' }, 404);
+	});
+	return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve(server)));
+}

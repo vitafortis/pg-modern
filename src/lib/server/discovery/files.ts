@@ -1,10 +1,10 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { parse as parseYaml } from 'yaml';
 import { config } from '../config.ts';
 import { getSettings } from '../store.ts';
-import { extractCandidates, fingerprint, interpolate, parseDotenv } from './env.ts';
+import { extractCandidates, interpolate, parseDotenv } from './env.ts';
+import { composeCandidates } from './compose.ts';
 import { mapLimit, probe } from './probe.ts';
 import type { Candidate, EnvScanResult } from '#lib/types.ts';
 
@@ -16,7 +16,6 @@ const ENV_FILE = /^(\.env(\..+)?|.+\.env|stack\.env)$/i;
 const COMPOSE_FILE = /^(docker-)?compose(\.[\w-]+)?\.ya?ml$/i;
 const MAX_FILE_BYTES = 512 * 1024;
 const MAX_FILES = 5000;
-const PG_IMAGE = /postgres|postgis|timescale|pgvector|pgvecto|paradedb|spilo|immich-app\/postgres|tensorchord/i;
 
 export function expandHome(p: string): string {
 	return p === '~' || p.startsWith('~/') ? join(homedir(), p.slice(1)) : p;
@@ -55,117 +54,14 @@ async function readSmall(path: string): Promise<string | null> {
 	}
 }
 
-type ComposeService = {
-	image?: string;
-	container_name?: string;
-	environment?: Record<string, string | number | null> | string[];
-	env_file?: string | string[] | { path: string }[];
-	ports?: (string | number | { target: number; published?: string | number; host_ip?: string })[];
-};
-
-function composeEnv(env: ComposeService['environment']): Record<string, string> {
-	if (!env) return {};
-	if (Array.isArray(env)) {
-		return Object.fromEntries(
-			env.map((line) => {
-				const i = String(line).indexOf('=');
-				return i === -1 ? [String(line), ''] : [String(line).slice(0, i), String(line).slice(i + 1)];
-			})
-		);
-	}
-	return Object.fromEntries(Object.entries(env).map(([k, v]) => [k, v == null ? '' : String(v)]));
-}
-
-/** Host port a service publishes for `target`, from short ("5433:5432") or long syntax. */
-function publishedPort(ports: ComposeService['ports'], target: number): { host: string; port: number } | null {
-	for (const p of ports ?? []) {
-		if (typeof p === 'object') {
-			if (Number(p.target) === target && p.published) return { host: p.host_ip || 'localhost', port: Number(p.published) };
-			continue;
-		}
-		const parts = String(p).replace(/\/(tcp|udp)$/, '').split(':');
-		if (parts.length >= 2 && Number(parts[parts.length - 1]) === target) {
-			const host = parts.length === 3 ? parts[0] : 'localhost';
-			return { host: host === '0.0.0.0' ? 'localhost' : host, port: Number(parts[parts.length - 2]) };
-		}
-	}
-	return null;
-}
-
 async function scanCompose(path: string, content: string): Promise<Candidate[]> {
 	const dir = dirname(path);
-	const dotenv = parseDotenv((await readSmall(join(dir, '.env'))) ?? '');
-	const vars = dotenv;
-	let doc: { services?: Record<string, ComposeService>; name?: string };
-	try {
-		doc = parseYaml(content) ?? {};
-	} catch {
-		return [];
-	}
-	const services = doc.services ?? {};
-	const project = doc.name ?? basename(dir);
-	const out: Candidate[] = [];
-
-	const serviceEnv = async (svc: ComposeService) => {
-		const files = Array.isArray(svc.env_file) ? svc.env_file : svc.env_file ? [svc.env_file] : [];
-		const fromFiles: Record<string, string> = {};
-		for (const f of files) {
-			const p = typeof f === 'string' ? f : f.path;
-			Object.assign(fromFiles, parseDotenv((await readSmall(resolve(dir, interpolate(p, vars)))) ?? ''));
-		}
-		const env = { ...fromFiles, ...composeEnv(svc.environment) };
-		for (const k of Object.keys(env)) env[k] = interpolate(env[k], vars);
-		return env;
-	};
-
-	// Map service names → reachable addresses, so app services referencing "db" resolve.
-	const servers = new Map<string, { host: string; port: number; label: string }[]>();
-	for (const [name, svc] of Object.entries(services)) {
-		const env = await serviceEnv(svc);
-		const isServer = PG_IMAGE.test(interpolate(svc.image ?? '', vars)) || 'POSTGRES_PASSWORD' in env || 'PGDATA' in env;
-		if (!isServer) continue;
-		const internal = Number(env.PGPORT) || 5432;
-		const pub = publishedPort(svc.ports, internal);
-		const addrs = [
-			...(pub ? [{ ...pub, label: 'published port' }] : []),
-			{ host: svc.container_name ?? name, port: internal, label: 'compose service' }
-		];
-		servers.set(name.toLowerCase(), addrs);
-		if (svc.container_name) servers.set(svc.container_name.toLowerCase(), addrs);
-
-		const user = env.POSTGRES_USER || env.POSTGRESQL_USERNAME || 'postgres';
-		const password = env.POSTGRES_PASSWORD || env.POSTGRESQL_PASSWORD || undefined;
-		const notes: string[] = [];
-		if (!password && env.POSTGRES_PASSWORD_FILE) notes.push('Password comes from a secret file; enter it manually.');
-		if (!pub) notes.push('No published port — reachable only from the compose network.');
-		const base = { host: addrs[0].host, port: addrs[0].port, database: env.POSTGRES_DB || env.POSTGRESQL_DATABASE || user, user };
-		out.push({
-			...base,
-			fingerprint: fingerprint(base),
-			name: `${project}/${name}`,
-			password,
-			hasPassword: !!password,
-			sslMode: 'prefer',
-			source: { kind: 'env', ref: path },
-			alternates: addrs.slice(1),
-			notes
-		});
-	}
-
-	for (const [name, svc] of Object.entries(services)) {
-		if (servers.has(name.toLowerCase())) continue;
-		for (const c of extractCandidates(await serviceEnv(svc), { label: `${project}/${name}`, source: { kind: 'env', ref: path } })) {
-			const target = servers.get(c.host.toLowerCase());
-			if (target) {
-				c.alternates = [{ host: c.host, port: c.port, label: 'as configured' }, ...target.slice(1)];
-				c.host = target[0].host;
-				c.port = target[0].port;
-				c.fingerprint = fingerprint(c);
-			}
-			out.push(c);
-		}
-	}
-	return out;
+	return composeCandidates(content, {
+		project: basename(dir),
+		source: { kind: 'env', ref: path },
+		vars: parseDotenv((await readSmall(join(dir, '.env'))) ?? ''),
+		readEnvFile: async (p) => parseDotenv((await readSmall(resolve(dir, p))) ?? '')
+	});
 }
 
 export async function scanFiles(extraRoots: string[] = []): Promise<{ result: EnvScanResult; candidates: Candidate[] }> {

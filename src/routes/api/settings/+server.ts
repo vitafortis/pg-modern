@@ -41,6 +41,6 @@ export const PUT: RequestHandler = handler(async ({ request }) => {
 	for (const h of dockerHosts) {
 		if (!/^(unix|tcp):\/\//.test(h)) throw new BadRequest(`Docker host "${h}" must start with unix:// or tcp://`);
 	}
-	saveSettings({ scanPaths: clean(body.scanPaths), dockerHosts });
+	saveSettings({ ...getSettings(), scanPaths: clean(body.scanPaths), dockerHosts });
 	return json(getSettings());
 });

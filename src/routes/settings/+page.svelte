@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { FolderSearch, KeyRound, Container, Plus, Save, ShieldCheck, X, LoaderCircle, Copy, LogIn } from '@lucide/svelte';
+	import { FolderSearch, KeyRound, Container, Plus, Save, ShieldCheck, X, LoaderCircle, Copy, LogIn, Boxes, Zap, Trash2, CircleCheck, CircleAlert } from '@lucide/svelte';
 	import PageHeader from '#lib/components/PageHeader.svelte';
 	import { api, errorMessage } from '#lib/client/api.ts';
 	import { toast } from '#lib/client/state.svelte.ts';
-	import type { Settings } from '#lib/types.ts';
+	import type { Manager, Settings } from '#lib/types.ts';
 
 	type Env = {
 		scanPaths: string[];
@@ -35,7 +35,49 @@
 	let newHost = $state('');
 	let saving = $state(false);
 
+	let managers = $state<Manager[]>([]);
+	let mForm = $state({ name: 'Arcane', url: '', apiKey: '' });
+	let mTest = $state<{ ok: true; environments: number } | { ok: false; error: string } | null>(null);
+	let mBusy = $state(false);
+
+	async function loadManagers() {
+		managers = await api.get<Manager[]>('/api/managers');
+	}
+
+	async function testManager(m?: Manager) {
+		mBusy = true;
+		mTest = null;
+		try {
+			mTest = await api.post('/api/managers/test', m ? { url: m.url, id: m.id } : { url: mForm.url, apiKey: mForm.apiKey });
+			if (m) toast(mTest!.ok ? 'success' : 'error', mTest!.ok ? `${m.name}: ${(mTest as { environments: number }).environments} environment(s)` : `${m.name} failed`, mTest!.ok ? undefined : (mTest as { error: string }).error);
+		} finally {
+			mBusy = false;
+		}
+	}
+
+	async function addManager(e: SubmitEvent) {
+		e.preventDefault();
+		mBusy = true;
+		try {
+			await api.post('/api/managers', mForm);
+			toast('success', `${mForm.name} connected`, 'Its projects now show up under Discover → Arcane.');
+			mForm = { name: 'Arcane', url: '', apiKey: '' };
+			mTest = null;
+			await loadManagers();
+		} catch (err) {
+			toast('error', 'Could not add', errorMessage(err));
+		} finally {
+			mBusy = false;
+		}
+	}
+
+	async function removeManager(m: Manager) {
+		await api.del(`/api/managers/${m.id}`);
+		await loadManagers();
+	}
+
 	onMount(async () => {
+		loadManagers();
 		const res = await api.get<{ settings: Settings; env: Env }>('/api/settings');
 		settings = res.settings;
 		env = res.env;
@@ -113,6 +155,46 @@
 				<input class="input h-8 font-mono text-xs" placeholder="tcp://10.0.0.5:2375" bind:value={newHost} />
 				<button class="btn btn-secondary" disabled={!newHost.trim()}><Plus />Add</button>
 			</form>
+		</section>
+
+		<section id="managers" class="card scroll-mt-6 p-5 lg:col-span-2">
+			<h2 class="flex items-center gap-2 text-[14px] font-semibold"><Boxes class="size-4 text-primary" />Docker managers</h2>
+			<p class="mt-1 text-xs text-muted-foreground">
+				Read stacks through Arcane's API instead of mounting folders: every project's compose file and .env, across all of its
+				environments. Create a key in Arcane under <b class="font-medium text-foreground">Settings → API Keys</b> with only
+				<code class="font-mono">environments:list</code>, <code class="font-mono">projects:list</code> and <code class="font-mono">projects:read</code>.
+			</p>
+			{#if managers.length}
+				<div class="mt-4 space-y-1.5">
+					{#each managers as m (m.id)}
+						<div class="flex items-center gap-3 rounded-lg border border-border px-3 py-2 text-xs">
+							<Boxes class="size-3.5 text-primary" />
+							<span class="font-medium">{m.name}</span>
+							<span class="min-w-0 flex-1 truncate font-mono text-muted-foreground">{m.url}</span>
+							{#if m.fromEnv}<span class="badge">PGM_ARCANE_URL</span>{/if}
+							{#if !m.hasKey}<span class="badge badge-warning">no API key</span>{/if}
+							<button class="btn btn-ghost btn-sm" disabled={mBusy} onclick={() => testManager(m)}><Zap />Test</button>
+							{#if !m.fromEnv}
+								<button class="btn btn-ghost btn-icon btn-sm hover:text-danger" title="Remove" onclick={() => removeManager(m)}><Trash2 /></button>
+							{/if}
+						</div>
+					{/each}
+				</div>
+			{/if}
+			<form class="mt-4 grid gap-2 md:grid-cols-[10rem_1fr_1fr_auto_auto]" onsubmit={addManager}>
+				<input class="input h-8 text-xs" placeholder="Name" bind:value={mForm.name} />
+				<input class="input h-8 font-mono text-xs" placeholder="https://arcane.home.arpa" required bind:value={mForm.url} />
+				<input class="input h-8 font-mono text-xs" type="password" placeholder="API key" autocomplete="off" required bind:value={mForm.apiKey} />
+				<button type="button" class="btn btn-secondary" disabled={mBusy || !mForm.url || !mForm.apiKey} onclick={() => testManager()}>
+					{#if mBusy}<LoaderCircle class="animate-spin" />{:else}<Zap />{/if}Test
+				</button>
+				<button class="btn btn-primary" disabled={mBusy}><Plus />Connect</button>
+			</form>
+			{#if mTest}
+				<p class="mt-2 flex items-center gap-1.5 text-xs {mTest.ok ? 'text-success' : 'text-danger'}">
+					{#if mTest.ok}<CircleCheck class="size-3.5" />Connected — {mTest.environments} environment{mTest.environments === 1 ? '' : 's'} visible.{:else}<CircleAlert class="size-3.5" />{mTest.error}{/if}
+				</p>
+			{/if}
 		</section>
 
 		<section class="card p-5 lg:col-span-2">

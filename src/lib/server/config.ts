@@ -53,6 +53,10 @@ export const config = {
 				defaultRole: process.env.PGM_OIDC_DEFAULT_ROLE === 'admin' ? ('admin' as const) : ('viewer' as const)
 			}
 		: undefined,
+	/** An Arcane instance to read stacks from (more can be added in Settings). */
+	arcane: process.env.PGM_ARCANE_URL
+		? { url: process.env.PGM_ARCANE_URL, apiKey: process.env.PGM_ARCANE_API_KEY ?? '', name: process.env.PGM_ARCANE_NAME ?? 'Arcane' }
+		: undefined,
 	statementTimeoutMs: Number(process.env.PGM_STATEMENT_TIMEOUT_MS ?? 30_000),
 	maxRows: Number(process.env.PGM_MAX_ROWS ?? 5_000)
 };

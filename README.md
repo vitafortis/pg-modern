@@ -15,7 +15,7 @@
 
 ## Features
 
-- **Discover**: finds Postgres containers on your Docker hosts, connection strings in app containers, and credentials in `.env` and `compose.yaml` files across your stacks folders. Import them in one click.
+- **Discover**: finds Postgres containers on your Docker hosts, connection strings in app containers, credentials in `.env` and `compose.yaml` files, and every project managed by [Arcane](https://getarcane.app) through its API. Import them in one click.
 - **Encrypted storage**: connection passwords are sealed with AES-256-GCM. Discovered secrets never reach the browser.
 - **Read-only by default**: every query runs in a `READ ONLY` transaction that is always rolled back. Writes are opt-in per connection, and destructive statements still ask first.
 - **Browse**: schema tree; filter, sort, page and export tables; inspect JSON cells; view columns, indexes, constraints, foreign keys and triggers.
@@ -57,6 +57,18 @@ docker run -d --name pg-modern \
 ```
 
 The container runs as an unprivileged user. `--group-add` gives it read access to the Docker socket. Leave the socket mount out if you don't want container discovery.
+
+### Using Arcane?
+
+If [Arcane](https://getarcane.app) manages your stacks, you don't need to mount anything. pg·modern reads each project's compose file and `.env` through Arcane's API, across every environment (host) Arcane manages.
+
+1. In Arcane, go to **Settings → API Keys** and create a key with only `environments:list`, `projects:list` and `projects:read`.
+2. In pg·modern, go to **Settings → Docker managers** and add your Arcane URL and the key. Or set `PGM_ARCANE_URL` and `PGM_ARCANE_API_KEY`.
+3. Open **Discover → Arcane**.
+
+Published ports resolve to each environment's host address. The API key is stored encrypted, like database passwords.
+
+If you'd rather scan the files directly, run pg·modern on the Arcane host and mount the projects folder at the same path, e.g. `- /opt/projects:/opt/projects:ro`. If Arcane writes `.env` files readable only by root, the container's non-root user can't read them; that's another reason to prefer the API.
 
 ### Reaching your databases
 
@@ -130,14 +142,14 @@ To build it yourself: `docker build -t pg-modern .`
 | --- | --- |
 | ![Discover containers](docs/screenshots/discover.png) | ![Discover files](docs/screenshots/discover-files.png) |
 | **Discover**: containers, with reachability and saved-state badges | **Discover**: `.env` and compose files |
+| ![Discover via Arcane](docs/screenshots/discover-arcane.png) | ![Users](docs/screenshots/users.png) |
+| **Discover**: Arcane projects across environments | **Users**: admins and read-only viewers |
 | ![Table browser](docs/screenshots/table.png) | ![Query editor](docs/screenshots/query.png) |
 | **Browse**: virtualized grid with a JSON cell inspector | **Query**: runs in a read-only transaction that is rolled back |
 | ![Structure](docs/screenshots/structure.png) | ![Server overview](docs/screenshots/server.png) |
 | **Structure**: columns, indexes, constraints | **Server overview** |
-| ![Users](docs/screenshots/users.png) | ![Sign in](docs/screenshots/login.png) |
-| **Users**: admins and read-only viewers | **Sign in**: SSO or password |
-| ![Light theme](docs/screenshots/overview-light.png) | |
-| **Light theme** | |
+| ![Sign in](docs/screenshots/login.png) | ![Light theme](docs/screenshots/overview-light.png) |
+| **Sign in**: SSO or password | **Light theme** |
 
 ## Configuration
 
@@ -148,6 +160,7 @@ To build it yourself: `docker build -t pg-modern .`
 | `PGM_SCAN_PATHS` | — | Comma-separated folders to scan (more can be added in the UI) |
 | `PGM_SCAN_DEPTH` | `6` | How deep to recurse into scan folders |
 | `PGM_DOCKER_HOSTS` | local socket | `unix://…` or `tcp://host:2375`, comma-separated |
+| `PGM_ARCANE_URL`, `PGM_ARCANE_API_KEY` | — | An Arcane instance to read projects from (more can be added in Settings) |
 | `PGM_STATEMENT_TIMEOUT_MS` | `30000` | Per-statement timeout |
 | `PGM_MAX_ROWS` | `5000` | Rows returned per result; the rest are truncated |
 | `PGM_AUTH` | — | `disabled` skips the login screen (trusted networks only) |
@@ -169,6 +182,8 @@ To build it yourself: `docker build -t pg-modern .`
 - Postgres servers are recognized by image (`postgres`, `postgis`, `timescaledb`, `pgvector`, `bitnami/postgresql`, `immich-app/postgres`, …) or by `POSTGRES_PASSWORD` / `PGDATA` in their environment.
 - Credentials come from `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB`, plus the Bitnami equivalents. Passwords kept in `*_FILE` secrets are flagged so you can type them in.
 - App containers are scanned for connection strings too. When an app points at a sibling container by service name, the candidate is rewritten to an address pg·modern can reach.
+
+**Arcane.** Each environment's projects are read through the API, and their compose and `.env` content goes through the same parser as files on disk.
 
 **Files.** Scan folders are walked for `.env`, `.env.*`, `*.env` and `compose.yaml` / `docker-compose.yml`.
 

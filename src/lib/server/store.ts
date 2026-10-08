@@ -210,7 +210,18 @@ function setKv(key: string, value: unknown) {
 }
 
 export function getSettings(): Settings {
-	return getKv<Settings>('settings', { scanPaths: [], dockerHosts: [] });
+	return { managers: [], ...getKv<Settings>('settings', { scanPaths: [], dockerHosts: [] }) };
+}
+
+/** Manager API keys are encrypted like connection passwords, bound to the manager id. */
+export function setManagerKey(id: string, apiKey: string | null) {
+	if (apiKey) setKv(`manager-key:${id}`, encrypt(apiKey, `manager:${id}`));
+	else db().prepare('DELETE FROM kv WHERE key = ?').run(`manager-key:${id}`);
+}
+
+export function getManagerKey(id: string): string | undefined {
+	const sealed = getKv<string | undefined>(`manager-key:${id}`, undefined);
+	return sealed ? decrypt(sealed, `manager:${id}`) : undefined;
 }
 
 export function saveSettings(settings: Settings) {

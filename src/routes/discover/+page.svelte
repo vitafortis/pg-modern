@@ -1,18 +1,21 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { Container, FileCode2, FolderSearch, LoaderCircle, Plus, Radar, RefreshCw, Server, X, Download, Power, Wifi } from '@lucide/svelte';
+	import { Boxes, Container, FileCode2, FolderSearch, LoaderCircle, Plus, Radar, RefreshCw, Server, X, Download, Power, Wifi } from '@lucide/svelte';
 	import PageHeader from '#lib/components/PageHeader.svelte';
 	import CandidateRow, { type Choice } from '#lib/components/CandidateRow.svelte';
 	import { api, errorMessage } from '#lib/client/api.ts';
 	import { refreshConnections, toast } from '#lib/client/state.svelte.ts';
-	import type { Candidate, Connection, DockerCandidateGroup, EnvScanResult, Settings } from '#lib/types.ts';
+	import type { Candidate, Connection, DockerCandidateGroup, EnvScanResult, Manager, ManagerScan, Settings } from '#lib/types.ts';
 
-	let tab = $state<'docker' | 'files'>('docker');
+	let tab = $state<'docker' | 'files' | 'managers'>('docker');
 	let docker = $state<DockerCandidateGroup[] | null>(null);
 	let files = $state<EnvScanResult | null>(null);
 	let loadingDocker = $state(false);
 	let loadingFiles = $state(false);
+	let managerScans = $state<ManagerScan[] | null>(null);
+	let managerCount = $state(0);
+	let loadingManagers = $state(false);
 	let importing = $state(false);
 	let settings = $state<Settings>({ scanPaths: [], dockerHosts: [] });
 	let envRoots = $state<string[]>([]);
@@ -43,6 +46,19 @@
 				.filter((c) => !filters.running || c.state === 'running')
 				.map((c) => ({ ...c, candidates: c.candidates.filter(keep) }))
 				.filter((c) => c.candidates.length)
+		}))
+	);
+	const runningStatus = (s: string) => /running|up/i.test(s) && !/^stopped/i.test(s);
+	const visibleManagers = $derived(
+		(managerScans ?? []).map((m) => ({
+			...m,
+			environments: m.environments.map((e) => ({
+				...e,
+				projects: e.projects
+					.filter((p) => !filters.running || runningStatus(p.status))
+					.map((p) => ({ ...p, candidates: p.candidates.filter(keep) }))
+					.filter((p) => p.candidates.length)
+			}))
 		}))
 	);
 	const visibleFiles = $derived(
@@ -81,6 +97,18 @@
 		}
 	}
 
+	async function scanManagers() {
+		loadingManagers = true;
+		try {
+			managerScans = await api.get<ManagerScan[]>('/api/discover/managers');
+			track(managerScans.flatMap((m) => m.environments.flatMap((e) => e.projects.flatMap((p) => p.candidates))));
+		} catch (err) {
+			toast('error', 'Arcane scan failed', errorMessage(err));
+		} finally {
+			loadingManagers = false;
+		}
+	}
+
 	async function saveRoots(scanPaths: string[]) {
 		settings = await api.put<Settings>('/api/settings', { ...settings, scanPaths });
 	}
@@ -99,19 +127,28 @@
 		envRoots = s.env.scanPaths;
 		scanDocker();
 		if (settings.scanPaths.length || envRoots.length) scanFiles();
+		managerCount = (await api.get<Manager[]>('/api/managers')).length;
+		if (managerCount) scanManagers();
 	});
 
 	// Only what's visible can be imported, so filters never import hidden rows by surprise.
 	const all = $derived([
 		...visibleDocker.flatMap((g) => g.containers.flatMap((c) => c.candidates)),
-		...visibleFiles.flatMap((f) => f.candidates)
+		...visibleFiles.flatMap((f) => f.candidates),
+		...visibleManagers.flatMap((m) => m.environments.flatMap((e) => e.projects.flatMap((p) => p.candidates)))
 	]);
 	const selected = $derived(all.filter((c) => c.key && choices[c.key]?.selected));
 	const dockerTotal = $derived((docker ?? []).reduce((n, g) => n + g.containers.reduce((m, c) => m + c.candidates.length, 0), 0));
 	const fileTotal = $derived((files?.files ?? []).reduce((n, f) => n + f.candidates.length, 0));
 	const dockerCount = $derived(visibleDocker.reduce((n, g) => n + g.containers.reduce((m, c) => m + c.candidates.length, 0), 0));
 	const fileCount = $derived(visibleFiles.reduce((n, f) => n + f.candidates.length, 0));
-	const hidden = $derived(tab === 'docker' ? dockerTotal - dockerCount : fileTotal - fileCount);
+	const countManagers = (scans: ManagerScan[]) =>
+		scans.reduce((n, m) => n + m.environments.reduce((a, e) => a + e.projects.reduce((b, p) => b + p.candidates.length, 0), 0), 0);
+	const managersTotal = $derived(countManagers(managerScans ?? []));
+	const managersVisible = $derived(countManagers(visibleManagers));
+	const hidden = $derived(
+		tab === 'docker' ? dockerTotal - dockerCount : tab === 'files' ? fileTotal - fileCount : managersTotal - managersVisible
+	);
 
 	/** Path relative to the scan folder it was found in (the full path is in the tooltip). */
 	function relativePath(path: string) {
@@ -153,10 +190,14 @@
 
 <div class="flex h-full flex-col">
 	<div class="min-h-0 flex-1 overflow-y-auto">
-		<PageHeader title="Discover" description="Find Postgres servers in running containers and credentials in .env and compose files.">
+		<PageHeader title="Discover" description="Find Postgres servers in containers, .env and compose files, and Arcane projects.">
 			{#snippet actions()}
-				<button class="btn btn-secondary" disabled={loadingDocker || loadingFiles} onclick={() => (tab === 'docker' ? scanDocker() : scanFiles())}>
-					{#if loadingDocker || loadingFiles}<LoaderCircle class="animate-spin" />{:else}<RefreshCw />{/if}Rescan
+				<button
+					class="btn btn-secondary"
+					disabled={loadingDocker || loadingFiles || loadingManagers}
+					onclick={() => (tab === 'docker' ? scanDocker() : tab === 'files' ? scanFiles() : scanManagers())}
+				>
+					{#if loadingDocker || loadingFiles || loadingManagers}<LoaderCircle class="animate-spin" />{:else}<RefreshCw />{/if}Rescan
 				</button>
 			{/snippet}
 		</PageHeader>
@@ -164,7 +205,7 @@
 		<div class="px-8 pb-28">
 			<div class="mb-5 flex flex-wrap items-center gap-3">
 			<div class="inline-flex rounded-lg border border-border bg-surface p-0.5">
-				{#each [{ id: 'docker', label: 'Containers', icon: Container, count: dockerCount }, { id: 'files', label: 'Files', icon: FileCode2, count: fileCount }] as t (t.id)}
+				{#each [{ id: 'docker', label: 'Containers', icon: Container, count: dockerCount }, { id: 'files', label: 'Files', icon: FileCode2, count: fileCount }, { id: 'managers', label: 'Arcane', icon: Boxes, count: managersVisible }] as t (t.id)}
 					<button
 						class="flex h-7 items-center gap-2 rounded-md px-3 text-[13px] font-medium transition {tab === t.id
 							? 'bg-card text-foreground shadow-surface'
@@ -178,7 +219,7 @@
 			</div>
 
 			<div class="flex items-center gap-1.5">
-				{#if tab === 'docker'}
+				{#if tab !== 'files'}
 					<button
 						class="btn btn-sm {filters.running ? 'btn-secondary text-primary' : 'btn-ghost'}"
 						aria-pressed={filters.running}
@@ -246,6 +287,65 @@
 										</div>
 									{/each}
 								</div>
+							</section>
+						{/each}
+					</div>
+				{/if}
+			{:else if tab === 'managers'}
+				{#if !managerCount}
+					<div class="card relative overflow-hidden px-6 py-12 text-center">
+						<div class="dot-grid mask-fade pointer-events-none absolute inset-0"></div>
+						<div class="relative mx-auto max-w-md">
+							<div class="mx-auto grid size-11 place-items-center rounded-xl bg-primary-soft text-primary"><Boxes class="size-5" /></div>
+							<h2 class="mt-4 font-semibold tracking-tight">Read stacks straight from Arcane</h2>
+							<p class="mt-1.5 text-sm text-muted-foreground">
+								Connect an Arcane instance with an API key and pg·modern reads every project's compose file and .env across all of its
+								environments — no folder mounts or file permissions needed.
+							</p>
+							<a class="btn btn-primary mt-5" href="/settings#managers"><Plus />Connect Arcane</a>
+						</div>
+					</div>
+				{:else if loadingManagers && !managerScans}
+					<div class="card flex items-center gap-3 p-6 text-sm text-muted-foreground"><LoaderCircle class="size-4 animate-spin" />Reading projects from Arcane…</div>
+				{:else if managerScans}
+					<div class="space-y-6">
+						{#each visibleManagers as m (m.manager.id)}
+							<section class="space-y-4">
+								<div class="flex items-center gap-2 text-xs text-muted-foreground">
+									<Boxes class="size-3.5" /><span class="font-medium text-foreground">{m.manager.name}</span><span class="font-mono">{m.manager.url}</span>
+									{#if m.error}<span class="badge badge-danger">{m.error}</span>{/if}
+								</div>
+								{#each m.environments as env (env.id)}
+									<div>
+										<div class="mb-2 flex items-center gap-2 pl-1 text-xs text-muted-foreground">
+											<Server class="size-3.5" />{env.name}<span class="font-mono opacity-70">{env.host}</span>
+											{#if env.error}<span class="badge badge-danger">{env.error}</span>{/if}
+										</div>
+										{#if !env.error && !env.projects.length}
+											<div class="card p-4 text-center text-xs text-muted-foreground">
+												{hidden > 0 ? 'Nothing matches the current filters.' : 'No Postgres found in this environment’s projects.'}
+											</div>
+										{/if}
+										<div class="space-y-3">
+											{#each env.projects as p (p.id)}
+												<div class="card overflow-hidden">
+													<div class="flex items-center gap-3 border-b border-border bg-surface px-4 py-2.5">
+														<span class="size-2 rounded-full {runningStatus(p.status) ? 'bg-success shadow-[0_0_6px_var(--success)]' : 'bg-muted-foreground/40'}"></span>
+														<span class="text-[13px] font-medium">{p.name}</span>
+														<span class="ml-auto text-[11px] text-muted-foreground capitalize">{p.status}</span>
+													</div>
+													<div class="divide-y divide-border">
+														{#each p.candidates as cand, i (i)}
+															{#if cand.key && choices[cand.key]}
+																<CandidateRow candidate={cand} bind:choice={choices[cand.key]} />
+															{/if}
+														{/each}
+													</div>
+												</div>
+											{/each}
+										</div>
+									</div>
+								{/each}
 							</section>
 						{/each}
 					</div>

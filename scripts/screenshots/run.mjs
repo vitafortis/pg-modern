@@ -9,12 +9,13 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { chromium } from 'playwright';
-import { startMockDocker } from './mock-docker.mjs';
+import { startMockArcane, startMockDocker } from './mock-docker.mjs';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const OUT = join(ROOT, 'docs/screenshots');
 const DB_PORT = 54329;
 const DOCKER_PORT = 23750;
+const ARCANE_PORT = 23751;
 const APP_PORT = 5188;
 const APP = `http://127.0.0.1:${APP_PORT}`;
 const DB = { user: 'homelab', password: 'demo-password' };
@@ -27,6 +28,7 @@ const docker = (...args) => execFileSync('docker', args, { stdio: ['pipe', 'pipe
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let app;
 let mock;
+let arcane;
 
 function writeStacks() {
 	const file = (path, content) => {
@@ -67,6 +69,7 @@ async function main() {
 
 	console.log('• starting mock Docker API and app');
 	mock = await startMockDocker({ port: DOCKER_PORT, dbPort: DB_PORT, ...DB });
+	arcane = await startMockArcane({ port: ARCANE_PORT, dbPort: DB_PORT, ...DB });
 	writeStacks();
 	execFileSync('pnpm', ['build'], { cwd: ROOT, stdio: 'ignore' });
 	app = spawn('node', ['build'], {
@@ -79,6 +82,8 @@ async function main() {
 			PGM_DATA_DIR: join(tmp, 'data'),
 			PGM_DOCKER_HOSTS: `tcp://127.0.0.1:${DOCKER_PORT}`,
 			PGM_SCAN_PATHS: STACKS,
+			PGM_ARCANE_URL: `http://127.0.0.1:${ARCANE_PORT}`,
+			PGM_ARCANE_API_KEY: 'arc_demo',
 			// Only shown on the login and users pages; never contacted.
 			PGM_OIDC_ISSUER: 'https://auth.home.arpa/application/o/pg-modern/',
 			PGM_OIDC_CLIENT_ID: 'pg-modern',
@@ -122,6 +127,9 @@ async function main() {
 	await page.click('button:has-text("Files")');
 	await page.waitForSelector('text=vaultwarden', { timeout: 20000 });
 	await shot('discover-files');
+	await page.click('button:has-text("Arcane")');
+	await page.waitForSelector('span:text-is("vaultwarden")', { timeout: 20000 });
+	await shot('discover-arcane');
 	await api('POST', '/api/connections', { ...base, name: 'immich', database: 'immich', color: 'blue' });
 
 	await page.goto(`${APP}/`, { waitUntil: 'networkidle' });
@@ -181,6 +189,7 @@ try {
 } finally {
 	app?.kill();
 	mock?.close();
+	arcane?.close();
 	try {
 		docker('rm', '-f', CONTAINER);
 	} catch {}
