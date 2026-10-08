@@ -27,6 +27,11 @@ export const config = {
 	dataDir: resolve(process.env.PGM_DATA_DIR ?? './data'),
 	/** Optional master secret. When unset, a random key is generated in the data dir. */
 	secretKey: process.env.PGM_SECRET_KEY,
+	/** Creates the first admin on start (skips the setup wizard). */
+	bootstrapAdmin:
+		process.env.PGM_ADMIN_EMAIL && process.env.PGM_ADMIN_PASSWORD
+			? { email: process.env.PGM_ADMIN_EMAIL.trim(), password: process.env.PGM_ADMIN_PASSWORD, name: process.env.PGM_ADMIN_NAME?.trim() || null }
+			: undefined,
 	/** `disabled` turns off the login screen — only for fully trusted networks. */
 	authDisabled: process.env.PGM_AUTH === 'disabled',
 	/** Docker endpoints, e.g. `unix:///var/run/docker.sock,tcp://10.0.0.5:2375`. */

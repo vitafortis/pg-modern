@@ -86,12 +86,18 @@ function migrate(h: DatabaseSync) {
 		);
 	`);
 
-	// v1 had a single admin password; it becomes the local user "admin".
+	const userCols = h.prepare(`SELECT name FROM pragma_table_info('users')`).all() as { name: string }[];
+	if (!userCols.some((c) => c.name === 'needs_profile')) {
+		h.exec('ALTER TABLE users ADD COLUMN needs_profile INTEGER NOT NULL DEFAULT 0');
+	}
+
+	// v1 had a single admin password; it becomes the local user "admin", who is
+	// asked for a real email and name on their next sign-in.
 	const legacy = h.prepare(`SELECT value FROM kv WHERE key = 'admin_password'`).get() as Row | undefined;
 	const hasUsers = (h.prepare('SELECT count(*) AS n FROM users').get() as { n: number }).n > 0;
 	if (legacy && !hasUsers) {
 		h.prepare(
-			`INSERT INTO users (id, email, name, role, password_hash, created_at) VALUES (?, 'admin', 'Admin', 'admin', ?, ?)`
+			`INSERT INTO users (id, email, name, role, password_hash, needs_profile, created_at) VALUES (?, 'admin', 'Admin', 'admin', ?, 1, ?)`
 		).run(randomUUID(), JSON.parse(legacy.value as string), new Date().toISOString());
 	}
 	if (legacy) h.prepare(`DELETE FROM kv WHERE key = 'admin_password'`).run();
@@ -243,6 +249,7 @@ function toUser(r: Row): User {
 		hasPassword: r.password_hash != null,
 		sso: r.oidc_sub != null,
 		disabled: r.disabled === 1,
+		needsProfile: r.needs_profile === 1,
 		createdAt: r.created_at as string,
 		lastLoginAt: (r.last_login_at as string) ?? null
 	};
@@ -288,7 +295,10 @@ export function createUser(input: { email: string; name?: string | null; role: R
 	return getUser(id)!;
 }
 
-export function updateUser(id: string, patch: { role?: Role; disabled?: boolean; name?: string | null; passwordHash?: string | null; oidcSub?: string }) {
+export function updateUser(
+	id: string,
+	patch: { role?: Role; disabled?: boolean; name?: string | null; email?: string; passwordHash?: string | null; oidcSub?: string; needsProfile?: boolean }
+) {
 	const sets: string[] = [];
 	const values: (string | number | null)[] = [];
 	if (patch.role !== undefined) sets.push('role = ?'), values.push(patch.role);
@@ -296,10 +306,17 @@ export function updateUser(id: string, patch: { role?: Role; disabled?: boolean;
 	if (patch.name !== undefined) sets.push('name = ?'), values.push(patch.name);
 	if (patch.passwordHash !== undefined) sets.push('password_hash = ?'), values.push(patch.passwordHash);
 	if (patch.oidcSub !== undefined) sets.push('oidc_sub = ?'), values.push(patch.oidcSub);
+	if (patch.email !== undefined) sets.push('email = ?'), values.push(patch.email.trim());
+	if (patch.needsProfile !== undefined) sets.push('needs_profile = ?'), values.push(patch.needsProfile ? 1 : 0);
 	if (!sets.length) return getUser(id);
 	db().prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...values, id);
 	if (patch.disabled || patch.role) deleteUserSessions(id); // take effect immediately
 	return getUser(id);
+}
+
+/** An upgraded install's "admin" account that hasn't been given a real email yet. */
+export function legacyAdminPending(): boolean {
+	return !!db().prepare(`SELECT 1 FROM users WHERE needs_profile = 1 AND email = 'admin' AND disabled = 0`).get();
 }
 
 export function touchUserLogin(id: string) {

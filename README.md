@@ -35,7 +35,7 @@ curl -fsSLO https://raw.githubusercontent.com/vitafortis/pg-modern/main/compose.
 docker compose up -d
 ```
 
-Open `http://<your-host>:3030` and create the first admin account. Then go to **Discover**:
+Open `http://<your-host>:3030`. A short setup wizard creates the admin account (name, email, password) and optionally connects Arcane and your stacks folders. Then go to **Discover**:
 
 1. **Containers** lists every Postgres it found through the Docker API. Use **Running only** and **Reachable only** to cut the noise.
 2. **Files** scans the mounted stacks folder. You can add more folders right there.
@@ -90,7 +90,9 @@ pg·modern has two roles:
 | Add, edit and delete connections | ✓ | |
 | Discover, Settings, Users | ✓ | |
 
-The first account is created on the setup screen. Add more from the **Users** page, or let them sign in through SSO.
+The first admin is created by the setup wizard, or headlessly with `PGM_ADMIN_EMAIL` and `PGM_ADMIN_PASSWORD`, which create it on first start and skip the wizard. Add more people from the **Users** page, or let them sign in through SSO. Everyone can change their name, email and password under **My account** (click your name in the sidebar).
+
+**Upgrading from a version without accounts?** Your old password still works. Sign in as **`admin`**, and pg·modern asks once for your name and email; after that, sign in with your email.
 
 ### OIDC
 
@@ -159,8 +161,8 @@ To build it yourself: `docker build -t pg-modern .`
 | **Structure**: columns, indexes, constraints | **Server overview** |
 | ![Integrations](docs/screenshots/integrations.png) | ![Sign in](docs/screenshots/login.png) |
 | **Integrations**: SSO, Arcane, Docker and folders | **Sign in**: SSO or password |
-| ![Light theme](docs/screenshots/overview-light.png) | |
-| **Light theme** | |
+| ![Setup wizard](docs/screenshots/setup.png) | ![Light theme](docs/screenshots/overview-light.png) |
+| **First run**: setup wizard | **Light theme** |
 
 ## Configuration
 
@@ -174,6 +176,7 @@ To build it yourself: `docker build -t pg-modern .`
 | `PGM_ARCANE_URL`, `PGM_ARCANE_API_KEY` | — | An Arcane instance to read projects from (or add it under Integrations) |
 | `PGM_STATEMENT_TIMEOUT_MS` | `30000` | Per-statement timeout |
 | `PGM_MAX_ROWS` | `5000` | Rows returned per result; the rest are truncated |
+| `PGM_ADMIN_EMAIL`, `PGM_ADMIN_PASSWORD`, `PGM_ADMIN_NAME` | — | Create the first admin on start instead of using the setup wizard |
 | `PGM_AUTH` | — | `disabled` skips the login screen (trusted networks only) |
 | `PGM_LOCAL_LOGIN` | — | `disabled` hides the email/password form (SSO only); `enabled` forces it back on |
 | `PGM_OIDC_ISSUER` | — | OIDC issuer URL; enables SSO (or configure it under Integrations) |

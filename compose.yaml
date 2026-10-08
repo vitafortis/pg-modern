@@ -19,6 +19,9 @@ services:
       # (key permissions: environments:list, projects:list, projects:read):
       # PGM_ARCANE_URL: https://arcane.home.arpa
       # PGM_ARCANE_API_KEY: ${PGM_ARCANE_API_KEY}
+      # Optional: create the first admin here instead of in the setup wizard.
+      # PGM_ADMIN_EMAIL: you@example.com
+      # PGM_ADMIN_PASSWORD: ${PGM_ADMIN_PASSWORD}
       # Optional: manage the credential encryption key yourself.
       # Otherwise a random key is generated at /data/secret.key — back it up.
       # PGM_SECRET_KEY: change-me-to-a-long-random-string

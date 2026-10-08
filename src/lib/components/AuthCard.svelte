@@ -10,6 +10,7 @@
 		showForm = true,
 		sso,
 		error: initialError = '',
+		hint,
 		onsubmit
 	}: {
 		title: string;
@@ -21,6 +22,8 @@
 		/** SSO button: label and start URL. */
 		sso?: { name: string; href: string } | null;
 		error?: string;
+		/** Small note under the form. */
+		hint?: string;
 		onsubmit: (email: string, password: string) => Promise<string | void>;
 	} = $props();
 
@@ -84,5 +87,8 @@
 			</form>
 		{/if}
 		{#if error}<p class="mt-3 text-center text-xs text-danger">{error}</p>{/if}
+		{#if hint && showForm}
+			<p class="mt-4 rounded-lg bg-surface px-3 py-2 text-center text-[11px] text-muted-foreground">{@html hint}</p>
+		{/if}
 	</div>
 </div>

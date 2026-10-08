@@ -97,8 +97,12 @@ async function main() {
 		console.log(`  ✓ ${name}.png`);
 	};
 
-	// First admin, then integrations set up the way the UI does it.
-	await page.request.post(`${APP}/api/auth/setup`, { data: { email: 'admin', password: ADMIN_PASSWORD } });
+	// First run: the setup wizard, then integrations set up the way the UI does it.
+	await page.goto(`${APP}/setup`, { waitUntil: 'networkidle' });
+	await page.fill('#s-name', 'Sam Rivera');
+	await page.fill('#s-email', 'sam@home.arpa');
+	await shot('setup');
+	await page.request.post(`${APP}/api/auth/setup`, { data: { name: 'Sam Rivera', email: 'sam@home.arpa', password: ADMIN_PASSWORD } });
 	await page.request.put(`${APP}/api/integrations/sso`, {
 		data: {
 			// Shown on the login and integrations pages; never contacted.
@@ -117,7 +121,7 @@ async function main() {
 	await page.request.post(`${APP}/api/auth/logout`);
 	await page.goto(`${APP}/login`, { waitUntil: 'networkidle' });
 	await shot('login');
-	await page.request.post(`${APP}/api/auth/login`, { data: { email: 'admin', password: ADMIN_PASSWORD } });
+	await page.request.post(`${APP}/api/auth/login`, { data: { email: 'sam@home.arpa', password: ADMIN_PASSWORD } });
 
 	// Saved connections, as if imported earlier.
 	const api = (method, path, data) => page.request.fetch(`${APP}${path}`, { method, data }).then((r) => r.json());
@@ -170,7 +174,6 @@ async function main() {
 	await shot('query');
 
 	for (const u of [
-		{ email: 'sam@home.arpa', name: 'Sam Rivera', role: 'admin' },
 		{ email: 'jo@home.arpa', name: 'Jo Park', role: 'viewer' },
 		{ email: 'kids-tablet@home.arpa', role: 'viewer' }
 	]) {

@@ -32,5 +32,6 @@
 	showForm={data.localLogin}
 	sso={data.sso ? { name: data.sso.name, href: `/auth/oidc/start?next=${encodeURIComponent(next)}` } : null}
 	error={data.error}
+	hint={data.legacyHint ? 'Upgraded from an earlier version? Sign in as <b class="font-medium text-foreground">admin</b> with your existing password.' : undefined}
 	onsubmit={login}
 />

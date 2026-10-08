@@ -42,7 +42,7 @@
 
 	let filter = $state('');
 	let collapsed = $state(false);
-	const bare = $derived(page.url.pathname === '/login' || page.url.pathname === '/setup');
+	const bare = $derived(page.url.pathname === '/login' || page.url.pathname === '/setup' || data.needsProfile);
 	const filtered = $derived(
 		connections.list.filter((c) =>
 			`${c.name} ${c.host} ${c.database}`.toLowerCase().includes(filter.toLowerCase())
@@ -169,7 +169,7 @@
 			</div>
 
 			{#if data.viewer && data.auth === 'authenticated' && !collapsed}
-				<div class="flex items-center gap-2.5 border-t border-border px-3 py-2.5">
+				<a href="/account" title="My account" class="flex items-center gap-2.5 border-t border-border px-3 py-2.5 transition-colors hover:bg-accent/60">
 					<span class="grid size-7 shrink-0 place-items-center rounded-full bg-primary-soft text-[11px] font-semibold text-primary uppercase">
 						{(data.viewer.name ?? data.viewer.email).slice(0, 1)}
 					</span>
@@ -177,7 +177,7 @@
 						<p class="truncate text-[12px] font-medium">{data.viewer.name ?? data.viewer.email}</p>
 						<p class="truncate text-[11px] text-muted-foreground capitalize">{data.viewer.role}</p>
 					</div>
-				</div>
+				</a>
 			{/if}
 			<div class="flex items-center gap-1 border-t border-border p-2 {collapsed ? 'flex-col' : ''}">
 				<button class="btn btn-ghost btn-icon btn-sm" title="Toggle sidebar (⌘B)" onclick={() => (collapsed = !collapsed)}>

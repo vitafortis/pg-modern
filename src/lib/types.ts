@@ -184,6 +184,8 @@ export interface User {
 	/** Linked to an SSO identity. */
 	sso: boolean;
 	disabled: boolean;
+	/** Must set a real email/name before using the app (upgraded installs). */
+	needsProfile: boolean;
 	createdAt: string;
 	lastLoginAt: string | null;
 }
@@ -193,4 +195,6 @@ export interface Viewer {
 	email: string;
 	name: string | null;
 	role: Role;
+	hasPassword: boolean;
+	sso: boolean;
 }

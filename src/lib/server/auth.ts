@@ -1,7 +1,7 @@
 import type { Cookies } from '@sveltejs/kit';
 import { config } from './config.ts';
-import { randomToken, sha256 } from './crypto.ts';
-import { countUsers, createSession, deleteSession, sessionUser, touchUserLogin } from './store.ts';
+import { hashPassword, randomToken, sha256 } from './crypto.ts';
+import { countUsers, createSession, createUser, deleteSession, sessionUser, touchUserLogin } from './store.ts';
 import type { User } from '#lib/types.ts';
 
 export const SESSION_COOKIE = 'pgm_session';
@@ -18,12 +18,29 @@ const OPEN_USER: User = {
 	hasPassword: false,
 	sso: false,
 	disabled: false,
+	needsProfile: false,
 	createdAt: new Date(0).toISOString(),
 	lastLoginAt: null
 };
 
+let bootstrapped = false;
+
+/** PGM_ADMIN_EMAIL + PGM_ADMIN_PASSWORD create the first admin, so headless installs skip setup. */
+function bootstrapAdmin() {
+	bootstrapped = true;
+	const b = config.bootstrapAdmin;
+	if (!b || countUsers() > 0) return;
+	if (b.password.length < 8) {
+		console.warn('[pg-modern] PGM_ADMIN_PASSWORD must be at least 8 characters; showing the setup wizard instead.');
+		return;
+	}
+	createUser({ email: b.email, name: b.name, role: 'admin', passwordHash: hashPassword(b.password) });
+	console.log(`[pg-modern] Created admin ${b.email} from PGM_ADMIN_EMAIL.`);
+}
+
 export function authenticate(cookies: Cookies): { state: AuthState; user: User | null } {
 	if (config.authDisabled) return { state: 'disabled', user: OPEN_USER };
+	if (!bootstrapped) bootstrapAdmin();
 	if (countUsers() === 0) return { state: 'setup', user: null };
 	const token = cookies.get(SESSION_COOKIE);
 	const user = token ? sessionUser(sha256(token)) : undefined;
