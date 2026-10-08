@@ -13,6 +13,11 @@ permissions:
   contents: read
   packages: write
 
+# A newer push supersedes an in-flight build, so an older image can't land on :latest last.
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   publish:
     runs-on: ubuntu-latest
