@@ -72,7 +72,9 @@
 		'settings.integration': 'Changed integration',
 		'settings.discovery': 'Changed discovery settings',
 		'backup.export': 'Exported backup',
-		'backup.restore': 'Restored backup'
+		'backup.restore': 'Restored backup',
+		'session.cancel': 'Cancelled query',
+		'session.terminate': 'Terminated session'
 	};
 	const tone = (a: string) =>
 		/failed|delete/.test(a) ? 'text-danger' : /unlock|write|restore/.test(a) ? 'text-warning' : 'text-foreground';
