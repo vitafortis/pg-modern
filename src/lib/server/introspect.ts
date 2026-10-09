@@ -1,6 +1,6 @@
 import { readQuery, withClient, typeParsers } from './pg.ts';
 import { quoteIdent } from './sql.ts';
-import type { ColumnInfo, RelationSummary, SchemaTree } from '#lib/types.ts';
+import type { ColumnInfo, DiagramColumn, RelationSummary, SchemaDiagram, SchemaTree } from '#lib/types.ts';
 
 const SYSTEM_SCHEMA_FILTER = `n.nspname not in ('pg_catalog', 'information_schema')
 	and n.nspname not like 'pg\\_toast%' and n.nspname not like 'pg\\_temp\\_%'`;
@@ -340,4 +340,103 @@ export async function completionSchema(id: string) {
 		 group by 1, 2 order by 1, 2 limit 2000`
 	);
 	return rows;
+}
+
+export const DIAGRAM_LIMIT = 300;
+
+/**
+ * Tables of one schema with their columns and foreign keys, for the ER diagram.
+ * Tables in other schemas that foreign keys point at come back as `external`,
+ * with only their key columns.
+ */
+export async function diagram(id: string, schema: string, { views = false } = {}): Promise<SchemaDiagram> {
+	const kinds = views ? ['r', 'p', 'f', 'v', 'm'] : ['r', 'p', 'f'];
+	const rels = await readQuery<{ oid: number; name: string; kind: string }>(
+		id, `select c.oid, c.relname as name, c.relkind as kind
+		 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+		 where n.nspname = $1 and c.relkind::text = any($2::text[]) and not c.relispartition
+		 order by c.relname limit $3`,
+		[schema, kinds, DIAGRAM_LIMIT + 1]
+	);
+	const truncated = rels.length > DIAGRAM_LIMIT;
+	if (truncated) rels.length = DIAGRAM_LIMIT;
+	if (!rels.length) return { schema, tables: [], foreignKeys: [], truncated };
+	const oids = rels.map((r) => r.oid);
+
+	// Clones of a partitioned table's constraint (conparentid <> 0) point at single partitions; skip them.
+	const fks = await readQuery<{
+		name: string;
+		from_oid: number;
+		to_oid: number;
+		to_schema: string;
+		to_table: string;
+		to_kind: string;
+		from_cols: string[];
+		to_cols: string[];
+	}>(
+		id, `select con.conname as name, con.conrelid as from_oid, con.confrelid as to_oid,
+			tn.nspname as to_schema, tc.relname as to_table, tc.relkind as to_kind,
+			to_jsonb(array(select a.attname::text from unnest(con.conkey) with ordinality k(num, ord)
+				join pg_attribute a on a.attrelid = con.conrelid and a.attnum = k.num order by k.ord)) as from_cols,
+			to_jsonb(array(select a.attname::text from unnest(con.confkey) with ordinality k(num, ord)
+				join pg_attribute a on a.attrelid = con.confrelid and a.attnum = k.num order by k.ord)) as to_cols
+		 from pg_constraint con
+		 join pg_class tc on tc.oid = con.confrelid
+		 join pg_namespace tn on tn.oid = tc.relnamespace
+		 where con.contype = 'f' and con.conparentid = 0 and con.conrelid = any($1::oid[])
+		 order by con.conrelid, con.conname`,
+		[oids]
+	);
+
+	const included = new Set(oids);
+	const external = new Map<number, { schema: string; name: string; kind: string; keys: Set<string> }>();
+	for (const fk of fks) {
+		if (included.has(fk.to_oid)) continue;
+		const ext = external.get(fk.to_oid) ?? { schema: fk.to_schema, name: fk.to_table, kind: fk.to_kind, keys: new Set<string>() };
+		for (const c of fk.to_cols) ext.keys.add(c);
+		external.set(fk.to_oid, ext);
+	}
+
+	const cols = await readQuery<{ rel: number; name: string; type: string; notnull: boolean; pk: boolean }>(
+		id, `select a.attrelid as rel, a.attname as name, format_type(a.atttypid, a.atttypmod) as type,
+			a.attnotnull as notnull, coalesce(a.attnum = any(pk.conkey), false) as pk
+		 from pg_attribute a
+		 left join pg_constraint pk on pk.conrelid = a.attrelid and pk.contype = 'p'
+		 where a.attrelid = any($1::oid[]) and a.attnum > 0 and not a.attisdropped
+		 order by a.attrelid, a.attnum`,
+		[[...oids, ...external.keys()]]
+	);
+	const colsByRel = new Map<number, DiagramColumn[]>();
+	for (const c of cols) {
+		const ext = external.get(c.rel);
+		if (ext && !c.pk && !ext.keys.has(c.name)) continue;
+		let list = colsByRel.get(c.rel);
+		if (!list) colsByRel.set(c.rel, (list = []));
+		list.push({ name: c.name, type: c.type, nullable: !c.notnull, isPrimaryKey: c.pk });
+	}
+
+	const nameOf = new Map(rels.map((r) => [r.oid, r.name]));
+	return {
+		schema,
+		truncated,
+		tables: [
+			...rels.map((r) => ({ schema, name: r.name, kind: KIND[r.kind] ?? 'table', columns: colsByRel.get(r.oid) ?? [] })),
+			...[...external].map(([oid, e]) => ({
+				schema: e.schema,
+				name: e.name,
+				kind: KIND[e.kind] ?? 'table',
+				columns: colsByRel.get(oid) ?? [],
+				external: true
+			}))
+		],
+		foreignKeys: fks.map((fk) => ({
+			name: fk.name,
+			fromSchema: schema,
+			fromTable: nameOf.get(fk.from_oid)!,
+			fromColumns: fk.from_cols,
+			toSchema: fk.to_schema,
+			toTable: fk.to_table,
+			toColumns: fk.to_cols
+		}))
+	};
 }

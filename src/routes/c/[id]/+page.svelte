@@ -1,12 +1,14 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { Gauge, Plus, Settings2, SquareTerminal, Table2, X, Eye, Layers, Rows3, Columns3 } from '@lucide/svelte';
+	import { Network } from '@lucide/svelte';
 	import SchemaTree from '#lib/components/SchemaTree.svelte';
 	import TableView from '#lib/components/TableView.svelte';
 	import StructureView from '#lib/components/StructureView.svelte';
 	import QueryView from '#lib/components/QueryView.svelte';
 	import ServerOverview from '#lib/components/ServerOverview.svelte';
 	import AccessBadge from '#lib/components/AccessBadge.svelte';
+	import SchemaDiagram from '#lib/components/SchemaDiagram.svelte';
 	import { api, errorMessage } from '#lib/client/api.ts';
 	import { COLORS } from '#lib/client/format.ts';
 	import { connections, editor, isAdmin, toast } from '#lib/client/state.svelte.ts';
@@ -16,7 +18,8 @@
 	type Tab =
 		| { id: string; kind: 'overview' }
 		| { id: string; kind: 'table'; schema: string; table: string; relKind: RelationSummary['kind']; view: 'data' | 'structure' }
-		| { id: string; kind: 'query'; title: string; sql: string };
+		| { id: string; kind: 'query'; title: string; sql: string }
+		| { id: string; kind: 'diagram'; schema: string };
 
 	let { data }: PageProps = $props();
 
@@ -97,6 +100,12 @@
 		activeId = id;
 	}
 
+	function openDiagram() {
+		const schema = active?.kind === 'table' ? active.schema : (tree?.schemas.find((s) => s.name === 'public') ?? tree?.schemas[0])?.name ?? 'public';
+		if (!tabs.some((t) => t.id === 'diagram')) tabs.push({ id: 'diagram', kind: 'diagram', schema });
+		activeId = 'diagram';
+	}
+
 	function close(id: string) {
 		const i = tabs.findIndex((t) => t.id === id);
 		tabs.splice(i, 1);
@@ -129,6 +138,7 @@
 		<AccessBadge {readOnly} />
 		<div class="ml-auto flex items-center gap-1.5">
 			<button class="btn btn-secondary btn-sm" onclick={() => openQuery()} title="New query (⌘K)"><SquareTerminal />New query</button>
+			<button class="btn btn-secondary btn-sm" onclick={openDiagram} title="Schema diagram"><Network />Diagram</button>
 			{#if isAdmin()}
 				<button class="btn btn-ghost btn-icon btn-sm" title="Connection settings" onclick={() => (editor.target = conn)}><Settings2 /></button>
 			{/if}
@@ -156,6 +166,8 @@
 							{:else if t.kind === 'table'}
 								{@const Icon = relIcon[t.relKind]}
 								<Icon class="size-3.5 shrink-0 opacity-70" /><span class="truncate">{t.table}</span>
+							{:else if t.kind === 'diagram'}
+								<Network class="size-3.5 shrink-0 opacity-70" /><span class="truncate">Diagram</span>
 							{:else}
 								<SquareTerminal class="size-3.5 shrink-0 opacity-70" /><span class="truncate">{t.title}</span>
 							{/if}
@@ -193,6 +205,8 @@
 									{/if}
 								</div>
 							</div>
+						{:else if t.kind === 'diagram'}
+							<SchemaDiagram connectionId={conn.id} bind:schema={t.schema} onopen={(s, n, k) => openTable(s, n, k)} />
 						{:else}
 							<QueryView connectionId={conn.id} {readOnly} bind:sql={t.sql} {completion} />
 						{/if}
