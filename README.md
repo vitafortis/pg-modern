@@ -25,6 +25,8 @@
 - **Saved queries**: name, describe and share queries per connection or for every connection; open them from the workspace header.
 - **EXPLAIN**: on Postgres, a visual plan tree with self time, misestimated row counts, buffers and the slowest node highlighted; `EXPLAIN ANALYZE` of a write runs inside a transaction that's rolled back. On MySQL the tree plan (`EXPLAIN ANALYZE` for reads on 8.0.18+), on MariaDB the JSON plan (`ANALYZE FORMAT=JSON` for reads).
 - **Server overview and activity**: version, size, cache hit ratio, extensions (storage engines and grants on MySQL); live sessions with lock chains, waiting and idle-in-transaction sessions, database and table sizes, dead tuples and unused indexes (Postgres) or the process list, InnoDB lock waits and index sizes (MySQL/MariaDB). Cancel or terminate a session (`KILL QUERY` / `KILL` on MySQL) once writes are unlocked.
+- **Health checks**: a Health tab with unused, duplicate and invalid indexes, missing foreign key indexes, bloat, vacuum, wraparound, sequences, long transactions, cache and connection usage, each with a plain-language explanation and a suggested fix to open in the editor (never run for you). See [Health checks](#health-checks).
+- **Read-only user helper**: generates the SQL for a dedicated least-privilege login, applies it if you choose, and switches the connection to it. See [A read-only user for pg·modern](#a-read-only-user-for-pgmodern).
 - **Backup & restore**: an encrypted, passphrase-protected file with connections, users and settings that restores on a fresh install.
 - **Users and SSO**: sign in with any OIDC provider (Authentik, Authelia, Keycloak, Pocket ID, Google, …). Accounts can be created automatically for matching emails. *Admins* manage everything; *viewers* browse and query read-only.
 - **Schema diagram**: an ER view of each schema (each database, on MySQL) built from its foreign keys.
@@ -229,6 +231,43 @@ Scan results stay on the server, and an import refers to them by key, so a disco
 **Settings → Backup & restore** downloads a `.pgmbackup` file with pg·modern's own configuration: connections (with their passwords), saved queries, users (password hashes, SSO links, connection access and grants), and settings (discovery, Arcane managers and their API keys, single sign-on, the password sign-in toggle). Query history, the audit log and sessions aren't included.
 
 The file is encrypted with a passphrase you choose (12+ characters), not the master key, so it also restores on a fresh install with a different `secret.key` or `PGM_SECRET_KEY`. Restoring first shows a preview of what would be added or updated, then merges the categories you pick: connections by id, users by email. Nothing is deleted, your own account is never changed, and settings are replaced as a whole. The API is `POST /api/backup` and `POST /api/backup/restore` (admins only).
+
+## Health checks
+
+**Health** in a connection's header runs a set of read-only checks and lists what they found by severity (critical, warning, info). Each finding says what's affected, why it matters, and suggests SQL to fix it. Copy the SQL, or **Open in query editor** to review and run it yourself; nothing is run for you. Every check is a catalog or statistics query on the read-only path with a short statement timeout (10 s) and lock timeout (1 s), and one that fails (say, permission denied on a `pg_stat` view) shows its error inline while the rest still run. **Re-run** checks again.
+
+| Check | Postgres | MySQL / MariaDB |
+| --- | :-: | :-: |
+| Transaction ID wraparound: `age(datfrozenxid)` per database, oldest `relfrozenxid` tables | ✓ | |
+| Sequences near exhaustion, counting the column type (an `integer` column fed by a `bigint` sequence) | ✓ | |
+| Invalid indexes (`indisvalid = false`, left by a failed `CREATE INDEX CONCURRENTLY`) | ✓ | |
+| Sessions idle in a transaction for 5+ minutes | ✓ | |
+| Long-running transactions (`information_schema.innodb_trx`) | | ✓ |
+| Connection usage vs `max_connections` | ✓ | ✓ |
+| Cache hit ratio (shared buffers) / buffer pool hit rate | ✓ | ✓ |
+| Dead tuple ratio, tables never or long not vacuumed / analyzed, autovacuum off | ✓ | |
+| Table bloat: an **estimate** from statistics (the widely used pgstattuple-free estimation query), labelled as such | ✓ | |
+| Fragmentation (`data_free`, per-table tablespaces only) | | ✓ |
+| Unused indexes (no scans since the statistics reset; not unique/PK, 1 MB+) | ✓ | ✓ (needs `performance_schema`; skipped with a note when it's off) |
+| Duplicate and overlapping indexes (same columns, or a leading prefix of another btree index) | ✓ | ✓ |
+| Possibly missing indexes: big tables read mostly by sequential scans (a heuristic) | ✓ | |
+| Foreign keys without a supporting index | ✓ | |
+| Tables without a primary key | ✓ | ✓ |
+| Non-InnoDB tables (MyISAM, Aria, MEMORY, …) | | ✓ |
+| Settings sanity, e.g. default `shared_buffers` on a large database (gentle info only) | ✓ | |
+
+Statistics-based checks are only as good as the statistics: usage counters are per server (check replicas before dropping an index) and reset on restart or `pg_stat_reset()`. A role without `pg_monitor` / `pg_read_all_stats` (or `PROCESS` on MySQL) sees only its own sessions. The tab is hidden for engines without checks. The API is `GET /api/connections/:id/health`.
+
+## A read-only user for pg·modern
+
+pg·modern only needs to read, so the safest setup is a login that can't write at all. Open a connection's settings (admins) and choose **Create a read-only user for pg·modern** — connection cards also show a small, dismissible hint when a connection uses a superuser (`rolsuper`) or MySQL `root` / an account with global `ALL` or `SUPER`.
+
+The dialog generates the SQL, with a strong random password (28 letters and digits):
+
+- **Postgres**: `CREATE ROLE … LOGIN PASSWORD …` with no special attributes and `default_transaction_read_only = on`; `GRANT CONNECT ON DATABASE`; for each selected schema `GRANT USAGE`, `GRANT SELECT ON ALL TABLES` and `ON ALL SEQUENCES`; and `ALTER DEFAULT PRIVILEGES FOR ROLE <owner> … GRANT SELECT` for every role that owns objects there. Default privileges apply per *creating* role, so tables a different role creates later still need a grant. On Postgres 14+ you can pick `pg_read_all_data` instead, which covers every schema now and later. Optionally `pg_monitor` (or just `pg_read_all_stats`) for the Activity and Health tabs. The password is sent as a SCRAM-SHA-256 hash by default, so the plain text never reaches the server or its statement log.
+- **MySQL / MariaDB**: `CREATE USER 'name'@'host' IDENTIFIED BY …` (host pattern `%` by default), `GRANT SELECT, SHOW VIEW ON db.*` per selected database (with `_` and `%` escaped so names match literally) or on `*.*`, and optionally `PROCESS` and `SELECT` on `performance_schema`.
+
+Nothing runs until you choose to. **Copy** the script to run it elsewhere, or **Apply** it here: that needs write access right now (a read/write connection or unlocked writes), asks for confirmation with the password masked, runs Postgres statements in one transaction, and is recorded in the audit log. **Switch this connection to the new user** tests the new credentials and, if they connect, stores them (encrypted) on the connection — also audited.
 
 ## Security model
 

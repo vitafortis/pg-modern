@@ -336,21 +336,24 @@ export function redundantIndexes(indexes: IndexShape[]): RedundantIndex[] {
 		byTable.get(t)!.push(i);
 	}
 	const keepRank = (i: IndexShape) => (i.primary ? 2 : i.unique ? 1 : 0);
-	for (const list of byTable.values()) {
-		for (const a of list) {
-			if (!a.columns.length) continue;
-			for (const b of list) {
-				if (a === b || flagged.has(key(a)) || flagged.has(key(b))) continue;
-				if (a.method !== b.method || (a.predicate ?? null) !== (b.predicate ?? null)) continue;
-				if (sameList(a.columns, b.columns)) {
-					// Keep the stronger one; on a tie, keep the alphabetically first name.
-					const aLoses = keepRank(a) < keepRank(b) || (keepRank(a) === keepRank(b) && a.name > b.name);
-					if (!aLoses) continue;
-					flagged.add(key(a));
-					out.push({ index: a, coveredBy: b, exact: true });
-				} else if (isPrefix(a.columns, b.columns) && !a.unique && !a.primary && a.method === 'btree') {
-					flagged.add(key(a));
-					out.push({ index: a, coveredBy: b, exact: false });
+	// Exact duplicates first, so a duplicate is reported as such rather than as covered by a wider index.
+	for (const pass of ['exact', 'prefix'] as const) {
+		for (const list of byTable.values()) {
+			for (const a of list) {
+				if (!a.columns.length) continue;
+				for (const b of list) {
+					if (a === b || flagged.has(key(a)) || flagged.has(key(b))) continue;
+					if (a.method !== b.method || (a.predicate ?? null) !== (b.predicate ?? null)) continue;
+					if (pass === 'exact' && sameList(a.columns, b.columns)) {
+						// Keep the stronger one; on a tie, keep the alphabetically first name.
+						const aLoses = keepRank(a) < keepRank(b) || (keepRank(a) === keepRank(b) && a.name > b.name);
+						if (!aLoses) continue;
+						flagged.add(key(a));
+						out.push({ index: a, coveredBy: b, exact: true });
+					} else if (pass === 'prefix' && isPrefix(a.columns, b.columns) && !a.unique && !a.primary && a.method === 'btree') {
+						flagged.add(key(a));
+						out.push({ index: a, coveredBy: b, exact: false });
+					}
 				}
 			}
 		}

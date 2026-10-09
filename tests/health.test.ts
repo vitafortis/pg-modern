@@ -85,6 +85,13 @@ test('redundantIndexes: different methods, predicates or tables never compare', 
 	assert.equal(redundantIndexes([idx('h', ['a'], { method: 'hash' }), idx('hab', ['a', 'b'], { method: 'hash' })]).length, 0);
 });
 
+test('redundantIndexes: an exact duplicate is reported as one even when a wider index also covers it', () => {
+	const r = redundantIndexes([idx('s_idx', ['status']), idx('s_created', ['status', 'created_at']), idx('s_dup', ['status'])]);
+	assert.equal(r.length, 2);
+	assert.ok(r.some((x) => x.exact && x.index.name === 's_idx' && x.coveredBy.name === 's_dup'));
+	assert.ok(r.some((x) => !x.exact && x.index.name === 's_dup' && x.coveredBy.name === 's_created'));
+});
+
 test('fkHasIndex: key columns must lead an index, in any order', () => {
 	assert.ok(fkHasIndex(['customer_id'], [idx('i', ['customer_id', 'created_at'])]));
 	assert.ok(fkHasIndex(['a', 'b'], [idx('i', ['b', 'a', 'c'])]));

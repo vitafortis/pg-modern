@@ -288,13 +288,13 @@
 		</div>
 
 		{#if editing && (editing.engine === 'postgres' || editing.engine === 'mysql')}
-			{@const target = editing}
 			<button
 				type="button"
 				class="flex w-full items-center gap-3 rounded-xl border border-dashed border-border p-3 text-left transition-colors hover:border-primary/40 hover:bg-primary/5"
 				onclick={() => {
+					// Hand over before closing: `editing` is derived from editor.target.
+					roHelper.target = editing;
 					editor.target = null;
-					roHelper.target = target;
 				}}
 			>
 				<ShieldCheck class="size-4 shrink-0 text-primary" />
