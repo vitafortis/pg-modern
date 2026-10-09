@@ -145,7 +145,7 @@ async function main() {
 	await api('POST', '/api/connections', { ...base, name: 'immich', database: 'immich', color: 'blue' });
 
 	await page.goto(`${APP}/`, { waitUntil: 'networkidle' });
-	await page.waitForSelector('text=pg 17', { timeout: 15000 });
+	await page.waitForSelector('text=/Postgres ?17/', { timeout: 15000 });
 	await sleep(2500); // let the unreachable host time out
 	await shot('overview');
 
@@ -191,7 +191,7 @@ async function main() {
 	await page.goto(`${APP}/`, { waitUntil: 'networkidle' });
 	await page.evaluate(() => localStorage.setItem('pgm-theme', 'light'));
 	await page.reload({ waitUntil: 'networkidle' });
-	await page.waitForSelector('text=pg 17');
+	await page.waitForSelector('text=/Postgres ?17/');
 	await sleep(2500);
 	await shot('overview-light');
 	await page.evaluate(() => localStorage.setItem('pgm-theme', 'dark'));
