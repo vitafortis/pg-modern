@@ -149,7 +149,8 @@ const NETWORK_HINTS: Record<string, string> = {
 	ENOTFOUND: 'That host name doesn’t resolve from pg·modern. Container names only resolve when pg·modern shares a Docker network with the database.',
 	EAI_AGAIN: 'That host name doesn’t resolve from pg·modern. Container names only resolve when pg·modern shares a Docker network with the database.',
 	ETIMEDOUT: 'The host didn’t answer. A firewall may be dropping traffic, or the address is on a network pg·modern can’t reach.',
-	EHOSTUNREACH: 'No route to that host from where pg·modern runs.'
+	EHOSTUNREACH: 'No route to that host from where pg·modern runs.',
+	'55P03': 'Another session holds a lock on this table (a migration or VACUUM FULL, for example). Check the Activity tab, or try again when it finishes.'
 };
 
 export function toQueryError(err: unknown): QueryError {
@@ -209,7 +210,7 @@ type RawField = { name: string; dataTypeID: number };
  */
 export async function withClient<T>(
 	id: string,
-	opts: { readOnly: boolean; timeoutMs?: number },
+	opts: { readOnly: boolean; timeoutMs?: number; /** Give up waiting for locks after this long (introspection). */ lockTimeoutMs?: number },
 	fn: (client: pg.PoolClient, entry: PoolEntry) => Promise<T>
 ): Promise<T> {
 	// Callers decide the mode (see permissions.ts); read-only is the default for everything else.
@@ -221,6 +222,7 @@ export async function withClient<T>(
 		if (readOnly) {
 			await client.query('BEGIN TRANSACTION READ ONLY');
 			await client.query(`SET LOCAL statement_timeout = ${Math.floor(opts.timeoutMs ?? config.statementTimeoutMs)}`);
+			if (opts.lockTimeoutMs) await client.query(`SET LOCAL lock_timeout = ${Math.floor(opts.lockTimeoutMs)}`);
 		} else {
 			await client.query(`SET statement_timeout = ${Math.floor(opts.timeoutMs ?? config.statementTimeoutMs)}`);
 		}
@@ -376,7 +378,8 @@ export async function readQuery<T extends pg.QueryResultRow>(
 	values: unknown[] = [],
 	timeoutMs?: number
 ): Promise<T[]> {
-	return withClient(id, { readOnly: true, timeoutMs }, async (client) => {
+	// Catalog reads shouldn't hang the UI behind someone's long-held lock.
+	return withClient(id, { readOnly: true, timeoutMs, lockTimeoutMs: 5000 }, async (client) => {
 		const { rows } = await client.query<T>({ text, values, types: typeParsers });
 		return rows;
 	});

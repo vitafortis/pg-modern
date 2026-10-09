@@ -13,6 +13,16 @@ const KIND: Record<string, RelationSummary['kind']> = {
 	p: 'partitioned'
 };
 
+/**
+ * Size functions take a lock that queues behind an ACCESS EXCLUSIVE lock (a migration,
+ * VACUUM FULL, …), which would stall the whole query. For such tables, estimate from
+ * planner statistics instead.
+ */
+const sizeOf = (oid: string, fn = 'pg_total_relation_size') =>
+	`case when exists (select 1 from pg_locks l where l.relation = ${oid} and l.mode = 'AccessExclusiveLock' and l.granted and l.pid <> pg_backend_pid())
+		then ${oid === 'c.oid' ? 'c.relpages' : `(select relpages from pg_class where oid = ${oid})`}::bigint * current_setting('block_size')::bigint
+		else ${fn}(${oid}) end`;
+
 export async function schemaTree(id: string, includeSystem = false): Promise<SchemaTree> {
 	const filter = includeSystem ? 'true' : SYSTEM_SCHEMA_FILTER;
 	const [schemas, relations, functions] = await Promise.all([
@@ -20,7 +30,7 @@ export async function schemaTree(id: string, includeSystem = false): Promise<Sch
 		readQuery<{ schema: string; name: string; kind: string; est_rows: string; size: string | null }>(
 			id, `select n.nspname as schema, c.relname as name, c.relkind as kind,
 				greatest(c.reltuples, 0)::bigint as est_rows,
-				case when c.relkind in ('r', 'm', 'p') then pg_total_relation_size(c.oid) end as size
+				case when c.relkind in ('r', 'm', 'p') then ${sizeOf('c.oid')} end as size
 			 from pg_class c join pg_namespace n on n.oid = c.relnamespace
 			 where c.relkind in ('r', 'v', 'm', 'f', 'p') and not c.relispartition and ${filter}
 			 order by 1, 2`
@@ -205,9 +215,9 @@ export async function structure(id: string, schema: string, table: string) {
 			viewdef: string | null;
 		}>(
 			id, `select c.relkind as kind, greatest(c.reltuples, 0)::bigint as est_rows,
-				case when c.relkind in ('r','m','p') then pg_total_relation_size(c.oid) end as total,
-				case when c.relkind in ('r','m','p') then pg_table_size(c.oid) end as table_size,
-				case when c.relkind in ('r','m','p') then pg_indexes_size(c.oid) end as index_size,
+				case when c.relkind in ('r','m','p') then ${sizeOf('c.oid')} end as total,
+				case when c.relkind in ('r','m','p') then ${sizeOf('c.oid', 'pg_table_size')} end as table_size,
+				case when c.relkind in ('r','m','p') then ${sizeOf('c.oid', 'pg_indexes_size')} end as index_size,
 				obj_description(c.oid, 'pg_class') as comment,
 				pg_get_userbyid(c.relowner) as owner,
 				case when c.relkind in ('v','m') then pg_get_viewdef(c.oid, true) end as viewdef
@@ -217,7 +227,7 @@ export async function structure(id: string, schema: string, table: string) {
 		),
 		readQuery<{ name: string; def: string; primary: boolean; unique: boolean; size: string }>(
 			id, `select ic.relname as name, pg_get_indexdef(i.indexrelid) as def, i.indisprimary as primary,
-				i.indisunique as unique, pg_relation_size(i.indexrelid) as size
+				i.indisunique as unique, ${sizeOf('i.indexrelid', 'pg_relation_size')} as size
 			 from pg_index i
 			 join pg_class ic on ic.oid = i.indexrelid
 			 join pg_class c on c.oid = i.indrelid
@@ -300,11 +310,12 @@ export async function overview(id: string) {
 				pg_is_in_recovery() as in_recovery`
 		),
 		readQuery<{ schema: string; name: string; size: string; est_rows: string }>(
-			id, `select n.nspname as schema, c.relname as name, pg_total_relation_size(c.oid) as size,
-				greatest(c.reltuples, 0)::bigint as est_rows
-			 from pg_class c join pg_namespace n on n.oid = c.relnamespace
-			 where c.relkind in ('r', 'm', 'p') and not c.relispartition and ${SYSTEM_SCHEMA_FILTER}
-			 order by pg_total_relation_size(c.oid) desc limit 8`
+			id, `select * from (
+				select n.nspname as schema, c.relname as name, ${sizeOf('c.oid')} as size,
+					greatest(c.reltuples, 0)::bigint as est_rows
+				from pg_class c join pg_namespace n on n.oid = c.relnamespace
+				where c.relkind in ('r', 'm', 'p') and not c.relispartition and ${SYSTEM_SCHEMA_FILTER}
+			 ) t order by size desc nulls last limit 8`
 		),
 		readQuery<{ name: string; version: string }>(id, `select extname as name, extversion as version from pg_extension order by 1`),
 		readQuery<{ state: string | null; count: number }>(
