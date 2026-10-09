@@ -204,36 +204,36 @@ async function captureMysql(id: string): Promise<SchemaSnapshotData> {
 	const q = (sql: string) => my.readQuery<Row>(id, sql, [], 60_000);
 	const optional = (sql: string) => q(sql).catch(() => [] as Row[]);
 	const [schemas, tables, cols, stats, fks, checks, views, routines, params, triggers] = await Promise.all([
-		q(`SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN (${sys})`),
-		q(`SELECT TABLE_SCHEMA AS \`schema\`, TABLE_NAME AS name, TABLE_TYPE AS type, ENGINE AS engine, TABLE_COMMENT AS comment
+		q(`SELECT SCHEMA_NAME AS \`name\` FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN (${sys})`),
+		q(`SELECT TABLE_SCHEMA AS \`schema\`, TABLE_NAME AS \`name\`, TABLE_TYPE AS \`type\`, ENGINE AS \`engine\`, TABLE_COMMENT AS \`comment\`
 		   FROM information_schema.TABLES WHERE TABLE_SCHEMA NOT IN (${sys})`),
-		q(`SELECT TABLE_SCHEMA AS \`schema\`, TABLE_NAME AS \`table\`, COLUMN_NAME AS name, COLUMN_TYPE AS type, IS_NULLABLE AS nullable,
-		     COLUMN_DEFAULT AS def, EXTRA AS extra, ORDINAL_POSITION AS pos
+		q(`SELECT TABLE_SCHEMA AS \`schema\`, TABLE_NAME AS \`table\`, COLUMN_NAME AS \`name\`, COLUMN_TYPE AS \`type\`, IS_NULLABLE AS \`nullable\`,
+		     COLUMN_DEFAULT AS \`def\`, EXTRA AS \`extra\`, ORDINAL_POSITION AS \`pos\`
 		   FROM information_schema.COLUMNS WHERE TABLE_SCHEMA NOT IN (${sys}) ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION`),
-		q(`SELECT TABLE_SCHEMA AS \`schema\`, TABLE_NAME AS \`table\`, INDEX_NAME AS name, NON_UNIQUE AS non_unique, SEQ_IN_INDEX AS seq,
-		     COLUMN_NAME AS col, SUB_PART AS sub_part, INDEX_TYPE AS index_type
+		q(`SELECT TABLE_SCHEMA AS \`schema\`, TABLE_NAME AS \`table\`, INDEX_NAME AS \`name\`, NON_UNIQUE AS \`non_unique\`, SEQ_IN_INDEX AS \`seq\`,
+		     COLUMN_NAME AS \`col\`, SUB_PART AS \`sub_part\`, INDEX_TYPE AS \`index_type\`
 		   FROM information_schema.STATISTICS WHERE TABLE_SCHEMA NOT IN (${sys}) ORDER BY TABLE_SCHEMA, TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`),
-		q(`SELECT k.TABLE_SCHEMA AS \`schema\`, k.TABLE_NAME AS \`table\`, k.CONSTRAINT_NAME AS name, k.COLUMN_NAME AS col,
-		     k.REFERENCED_TABLE_SCHEMA AS ref_schema, k.REFERENCED_TABLE_NAME AS ref_table, k.REFERENCED_COLUMN_NAME AS ref_col,
-		     r.UPDATE_RULE AS on_update, r.DELETE_RULE AS on_delete
+		q(`SELECT k.TABLE_SCHEMA AS \`schema\`, k.TABLE_NAME AS \`table\`, k.CONSTRAINT_NAME AS \`name\`, k.COLUMN_NAME AS \`col\`,
+		     k.REFERENCED_TABLE_SCHEMA AS \`ref_schema\`, k.REFERENCED_TABLE_NAME AS \`ref_table\`, k.REFERENCED_COLUMN_NAME AS \`ref_col\`,
+		     r.UPDATE_RULE AS \`on_update\`, r.DELETE_RULE AS \`on_delete\`
 		   FROM information_schema.KEY_COLUMN_USAGE k
 		   JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME AND r.TABLE_NAME = k.TABLE_NAME
 		   WHERE k.TABLE_SCHEMA NOT IN (${sys}) AND k.REFERENCED_TABLE_NAME IS NOT NULL
 		   ORDER BY k.TABLE_SCHEMA, k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION`),
 		// CHECK constraints: MySQL 8.0.16+ and MariaDB 10.2+.
-		optional(`SELECT t.TABLE_SCHEMA AS \`schema\`, t.TABLE_NAME AS \`table\`, t.CONSTRAINT_NAME AS name, c.CHECK_CLAUSE AS clause
+		optional(`SELECT t.TABLE_SCHEMA AS \`schema\`, t.TABLE_NAME AS \`table\`, t.CONSTRAINT_NAME AS \`name\`, c.CHECK_CLAUSE AS \`clause\`
 		   FROM information_schema.TABLE_CONSTRAINTS t
 		   JOIN information_schema.CHECK_CONSTRAINTS c ON c.CONSTRAINT_SCHEMA = t.CONSTRAINT_SCHEMA AND c.CONSTRAINT_NAME = t.CONSTRAINT_NAME
 		   WHERE t.CONSTRAINT_TYPE = 'CHECK' AND t.TABLE_SCHEMA NOT IN (${sys})`),
-		q(`SELECT TABLE_SCHEMA AS \`schema\`, TABLE_NAME AS name, VIEW_DEFINITION AS def FROM information_schema.VIEWS WHERE TABLE_SCHEMA NOT IN (${sys})`),
-		q(`SELECT ROUTINE_SCHEMA AS \`schema\`, ROUTINE_NAME AS name, ROUTINE_TYPE AS type, DTD_IDENTIFIER AS returns,
-		     ROUTINE_BODY AS lang, ROUTINE_DEFINITION AS def, IS_DETERMINISTIC AS deterministic, SQL_DATA_ACCESS AS access
+		q(`SELECT TABLE_SCHEMA AS \`schema\`, TABLE_NAME AS \`name\`, VIEW_DEFINITION AS \`def\` FROM information_schema.VIEWS WHERE TABLE_SCHEMA NOT IN (${sys})`),
+		q(`SELECT ROUTINE_SCHEMA AS \`schema\`, ROUTINE_NAME AS \`name\`, ROUTINE_TYPE AS \`type\`, DTD_IDENTIFIER AS \`returns\`,
+		     ROUTINE_BODY AS \`lang\`, ROUTINE_DEFINITION AS \`def\`, IS_DETERMINISTIC AS \`deterministic\`, SQL_DATA_ACCESS AS \`access\`
 		   FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA NOT IN (${sys})`),
-		optional(`SELECT SPECIFIC_SCHEMA AS \`schema\`, SPECIFIC_NAME AS name, PARAMETER_MODE AS mode, PARAMETER_NAME AS pname, DTD_IDENTIFIER AS type,
-		     ORDINAL_POSITION AS pos
+		optional(`SELECT SPECIFIC_SCHEMA AS \`schema\`, SPECIFIC_NAME AS \`name\`, PARAMETER_MODE AS \`mode\`, PARAMETER_NAME AS \`pname\`, DTD_IDENTIFIER AS \`type\`,
+		     ORDINAL_POSITION AS \`pos\`
 		   FROM information_schema.PARAMETERS WHERE SPECIFIC_SCHEMA NOT IN (${sys}) AND ORDINAL_POSITION > 0 ORDER BY SPECIFIC_SCHEMA, SPECIFIC_NAME, ORDINAL_POSITION`),
-		q(`SELECT TRIGGER_SCHEMA AS \`schema\`, EVENT_OBJECT_TABLE AS \`table\`, TRIGGER_NAME AS name, ACTION_TIMING AS timing,
-		     EVENT_MANIPULATION AS event, ACTION_STATEMENT AS stmt
+		q(`SELECT TRIGGER_SCHEMA AS \`schema\`, EVENT_OBJECT_TABLE AS \`table\`, TRIGGER_NAME AS \`name\`, ACTION_TIMING AS \`timing\`,
+		     EVENT_MANIPULATION AS \`event\`, ACTION_STATEMENT AS \`stmt\`
 		   FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA NOT IN (${sys})`)
 	]);
 

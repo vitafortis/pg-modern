@@ -255,7 +255,10 @@ export function migrationSql(diff: SchemaDiff, to: SchemaSnapshotData): string {
 		if (item.type !== 'table') {
 			if (item.type === 'extension' && !mysql && item.change === 'added') lines.push(`CREATE EXTENSION IF NOT EXISTS ${q(item.name)};`);
 			else if (item.type === 'extension' && !mysql && item.change === 'changed') lines.push(`ALTER EXTENSION ${q(item.name)} UPDATE TO '${item.after}';`);
-			else if ((item.type === 'view' || item.type === 'routine' || item.type === 'trigger') && item.change !== 'removed' && item.after && /^\s*create\b/i.test(item.after)) {
+			else if (item.type === 'view' && item.change !== 'removed' && item.after && !item.details.length) {
+				const def = item.after.trim().replace(/;\s*$/, '');
+				lines.push(`CREATE OR REPLACE VIEW ${qualified(item.schema!, item.name)} AS\n${def};`);
+			} else if ((item.type === 'routine' || item.type === 'trigger') && item.change !== 'removed' && item.after && /^\s*create\b/i.test(item.after)) {
 				lines.push(`-- ${item.type} ${item.key} (${item.change})`, item.after.replace(/;?\s*$/, ';'));
 			} else manual.push(`-- ${item.type} ${item.key}: ${item.change} — not generated, apply by hand`);
 			continue;
@@ -276,7 +279,9 @@ export function migrationSql(diff: SchemaDiff, to: SchemaSnapshotData): string {
 			continue;
 		}
 		const after = toTables.get(item.key)!;
-		for (const d of item.details) {
+		// Index drops first (a dropped column takes its indexes with it), then columns, then new indexes.
+		const order = (d: DetailChange) => (d.kind === 'index' ? (d.change === 'added' ? 2 : 0) : 1);
+		for (const d of [...item.details].sort((a, b) => order(a) - order(b))) {
 			if (d.kind === 'column') {
 				const col = after.columns.find((c) => c.name === d.name);
 				if (d.change === 'added' && col) lines.push(`ALTER TABLE ${name} ADD COLUMN ${colDef(col)};`);
@@ -294,7 +299,7 @@ export function migrationSql(diff: SchemaDiff, to: SchemaSnapshotData): string {
 					}
 				}
 			} else if (d.kind === 'index') {
-				if (d.change !== 'added') lines.push(mysql ? `DROP INDEX ${q(d.name)} ON ${name};` : `DROP INDEX ${q(item.schema!)}.${q(d.name)};`);
+				if (d.change !== 'added') lines.push(mysql ? `DROP INDEX ${q(d.name)} ON ${name};` : `DROP INDEX IF EXISTS ${q(item.schema!)}.${q(d.name)};`);
 				if (d.change !== 'removed' && d.after) lines.push(indexSql(d.after, mysql, name, d.name, q));
 			} else {
 				manual.push(`-- ${name}: ${d.kind} ${d.name} ${d.change}${d.after ? ` → ${d.after}` : ''}`);

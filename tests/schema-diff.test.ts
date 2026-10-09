@@ -90,7 +90,7 @@ test('index definition changes, additions and drops', () => {
 	const idx = d.items[0].details.filter((x) => x.kind === 'index');
 	assert.deepEqual(idx.map((x) => [x.name, x.change]).sort(), [['users_created_idx', 'added'], ['users_email_idx', 'changed']]);
 	const sql = migrationSql(d, normalizeSchema(to));
-	assert.match(sql, /DROP INDEX "public"\."users_email_idx";\nCREATE UNIQUE INDEX users_email_idx ON public\.users USING btree \(lower\(email\)\);/);
+	assert.match(sql, /DROP INDEX IF EXISTS "public"\."users_email_idx";\nCREATE UNIQUE INDEX users_email_idx ON public\.users USING btree \(lower\(email\)\);/);
 	assert.match(sql, /CREATE INDEX users_created_idx ON public\.users USING btree \(created_at\);/);
 });
 
