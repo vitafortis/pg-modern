@@ -78,8 +78,13 @@
 	function setEngine(engine: Engine) {
 		if (engine === form.engine) return;
 		const other = form.engine;
-		if (form.port === DEFAULT_PORT[other]) form.port = DEFAULT_PORT[engine];
-		if (engine === 'mysql') {
+		if (form.port === DEFAULT_PORT[other] || !form.port) form.port = DEFAULT_PORT[engine];
+		if (engine === 'sqlite') {
+			if (!form.database.startsWith('/')) form.database = '';
+		} else if (other === 'sqlite') {
+			form.database = engine === 'postgres' ? 'postgres' : '';
+			form.user = engine === 'postgres' ? 'postgres' : 'root';
+		} else if (engine === 'mysql') {
 			if (form.database === 'postgres') form.database = '';
 			if (form.user === 'postgres') form.user = 'root';
 		} else {
@@ -94,6 +99,14 @@
 	function applyUrl() {
 		try {
 			const raw = url.trim().replace(/^jdbc:/i, '');
+			if (/^sqlite:/i.test(raw)) {
+				// sqlite:///abs/path.db or sqlite:/abs/path.db
+				setEngine('sqlite');
+				form.database = decodeURIComponent(raw.replace(/^sqlite:(\/\/)?/i, '').replace(/[?#].*$/, ''));
+				if (!form.name) form.name = form.database.split('/').pop() ?? '';
+				url = '';
+				return;
+			}
 			const engine: Engine = /^(mysql|mariadb)/i.test(raw) ? 'mysql' : 'postgres';
 			setEngine(engine);
 			const u = new URL(raw.replace(/^[a-z][\w+]*:/i, 'http:'));
@@ -110,11 +123,18 @@
 			changePassword = true;
 			url = '';
 		} catch {
-			toast('error', 'Not a valid database URL', 'Use postgres://, mysql:// or mariadb://');
+			toast('error', 'Not a valid database URL', 'Use postgres://, mysql://, mariadb:// or sqlite:///path');
 		}
 	}
 
+	const sqlite = $derived(form.engine === 'sqlite');
+	/** A SQLite snapshot copied out of a container: path and mode are fixed. */
+	const snapshot = $derived(editing?.snapshot ?? null);
+
 	function payload() {
+		if (sqlite) {
+			return { engine: 'sqlite', name: form.name.trim() || form.database.split('/').pop(), path: form.database.trim(), readOnly: form.readOnly, color: form.color };
+		}
 		return {
 			...form,
 			name: form.name.trim() || `${form.database || form.user} @ ${form.host}`,
@@ -126,7 +146,7 @@
 		testing = true;
 		test = null;
 		try {
-			test = await api.post('/api/connections/test', { ...payload(), id: editing?.id });
+			test = snapshot && editing ? await api.post(`/api/connections/${editing.id}/test`) : await api.post('/api/connections/test', { ...payload(), id: editing?.id });
 		} catch (err) {
 			test = { ok: false, error: { message: errorMessage(err) } };
 		} finally {
@@ -160,16 +180,17 @@
 <Dialog
 	bind:open={() => open, (v) => !v && (editor.target = null)}
 	title={editing ? `Edit ${editing.name}` : 'New connection'}
-	description="Credentials are encrypted at rest with AES-256-GCM."
+	description={sqlite ? 'A SQLite database file pg·modern can read.' : 'Credentials are encrypted at rest with AES-256-GCM.'}
 	width="max-w-xl"
 >
 	<form id="conn-form" onsubmit={save} class="space-y-4">
-		<div class="grid grid-cols-2 gap-1 rounded-xl border border-border bg-surface p-1" role="radiogroup" aria-label="Database engine">
-			{#each [{ value: 'postgres', label: 'PostgreSQL', sub: 'Postgres and its forks' }, { value: 'mysql', label: 'MySQL · MariaDB', sub: 'MySQL, MariaDB, Percona' }] as e (e.value)}
+		<div class="grid grid-cols-3 gap-1 rounded-xl border border-border bg-surface p-1" role="radiogroup" aria-label="Database engine">
+			{#each [{ value: 'postgres', label: 'PostgreSQL', sub: 'Postgres and its forks' }, { value: 'mysql', label: 'MySQL · MariaDB', sub: 'MySQL, MariaDB, Percona' }, { value: 'sqlite', label: 'SQLite', sub: 'A database file' }] as e (e.value)}
 				<button
 					type="button"
 					role="radio"
 					aria-checked={form.engine === e.value}
+					disabled={!!snapshot && e.value !== 'sqlite'}
 					class="flex flex-col items-start rounded-lg px-3 py-1.5 text-left transition-colors {form.engine === e.value
 						? 'bg-card text-foreground shadow-surface'
 						: 'text-muted-foreground hover:text-foreground'}"
@@ -185,7 +206,7 @@
 			<div class="flex gap-2">
 				<input
 					class="input font-mono text-xs"
-					placeholder={form.engine === 'mysql' ? 'Paste mysql://user:pass@host:3306/db' : 'Paste postgres://user:pass@host:5432/db'}
+					placeholder={form.engine === 'mysql' ? 'Paste mysql://user:pass@host:3306/db' : sqlite ? 'Paste sqlite:///path/to/app.db' : 'Paste postgres://user:pass@host:5432/db'}
 					bind:value={url}
 				/>
 				<button type="button" class="btn btn-secondary h-9" disabled={!url} onclick={applyUrl}>Fill</button>
@@ -195,7 +216,7 @@
 		<div class="grid grid-cols-[1fr_auto] gap-3">
 			<div>
 				<label class="label" for="c-name">Name</label>
-				<input id="c-name" class="input" placeholder="media @ nas" bind:value={form.name} />
+				<input id="c-name" class="input" placeholder={sqlite ? 'sonarr' : 'media @ nas'} bind:value={form.name} />
 			</div>
 			<div>
 				<span class="label">Color</span>
@@ -213,6 +234,22 @@
 			</div>
 		</div>
 
+		{#if sqlite}
+			<div>
+				<label class="label" for="c-path">Database file</label>
+				{#if snapshot}
+					<p class="input flex h-9 items-center truncate font-mono text-[13px] text-muted-foreground" title="Snapshot of {snapshot.container}:{snapshot.containerPath}">
+						{snapshot.container}:{snapshot.containerPath}
+					</p>
+					<p class="mt-1 text-[11px] text-muted-foreground">A snapshot copied out of the container — refresh it from the connection’s page.</p>
+				{:else}
+					<input id="c-path" class="input font-mono text-[13px]" required placeholder="/appdata/sonarr/sonarr.db" bind:value={form.database} />
+					<p class="mt-1 text-[11px] text-muted-foreground">
+						The path as pg·modern sees it — inside its container, mount the app’s folder (e.g. <code class="font-mono">/opt/appdata:/appdata</code>).
+					</p>
+				{/if}
+			</div>
+		{:else}
 		<div class="grid grid-cols-[1fr_7rem] gap-3">
 			<div>
 				<label class="label" for="c-host">Host</label>
@@ -262,6 +299,7 @@
 				</select>
 			</div>
 		</div>
+		{/if}
 
 		<div
 			class="flex items-start gap-3 rounded-xl border p-3 transition-colors {form.readOnly
@@ -274,7 +312,15 @@
 			<div class="flex-1">
 				<p class="text-[13px] font-medium">{form.readOnly ? 'Read-only' : 'Read/write'}</p>
 				<p class="mt-0.5 text-xs text-muted-foreground">
-					{#if form.readOnly && form.engine === 'mysql'}
+					{#if snapshot}
+						A copy of a database taken out of a container. Writes would only change the copy, so it is always read-only.
+					{:else if form.readOnly && sqlite}
+						The file is opened read-only (<code class="font-mono">mode=ro</code>, <code class="font-mono">query_only</code>) and only reads run (SELECT,
+						EXPLAIN, read-only PRAGMAs), inside a transaction that is rolled back. Locks from the app that owns it are waited out for a few seconds.
+					{:else if sqlite}
+						Statements change the file directly, while the app that owns it may be running. Destructive statements still ask for confirmation — stop the
+						app or back up the file first for anything big.
+					{:else if form.readOnly && form.engine === 'mysql'}
 						Only reads run (SELECT, SHOW, DESCRIBE, EXPLAIN), on a read-only session inside a <code class="font-mono">READ ONLY</code> transaction that is rolled
 						back afterwards. A user with only <code class="font-mono">SELECT</code> grants is still the strongest guarantee.
 					{:else if form.readOnly}
@@ -284,7 +330,7 @@
 					{/if}
 				</p>
 			</div>
-			<Switch label="Read-only" bind:checked={form.readOnly} />
+			<Switch label="Read-only" bind:checked={form.readOnly} disabled={!!snapshot} />
 		</div>
 
 		{#if editing && (editing.engine === 'postgres' || editing.engine === 'mysql')}
@@ -314,7 +360,7 @@
 				{#if test.ok}
 					<CircleCheck class="size-4 shrink-0 text-success" />
 					<div>
-						<p class="font-medium text-foreground">Connected to {engineLabel(test.engine, test.flavor)} in {test.latencyMs} ms</p>
+						<p class="font-medium text-foreground">{test.engine === 'sqlite' ? 'Opened' : 'Connected to'} {engineLabel(test.engine, test.flavor)} in {test.latencyMs} ms</p>
 						<p class="mt-0.5 font-mono text-muted-foreground">{test.version}</p>
 					</div>
 				{:else}
@@ -322,6 +368,7 @@
 					<div>
 						<p class="font-medium text-foreground">Connection failed</p>
 						<p class="mt-0.5 font-mono break-all text-muted-foreground">{test.error.message}</p>
+						{#if test.error.hint}<p class="mt-1 text-muted-foreground">{test.error.hint}</p>{/if}
 					</div>
 				{/if}
 			</div>
@@ -340,7 +387,7 @@
 				<button class="btn btn-ghost mr-auto text-danger hover:text-danger" onclick={() => (confirmDelete = true)}><Trash2 />Delete</button>
 			{/if}
 		{/if}
-		<button class="btn btn-secondary" disabled={testing || !form.host} onclick={runTest}>
+		<button class="btn btn-secondary" disabled={testing || (sqlite ? !form.database && !snapshot : !form.host)} onclick={runTest}>
 			{#if testing}<LoaderCircle class="animate-spin" />{:else}<Zap />{/if}Test
 		</button>
 		<button class="btn btn-primary" form="conn-form" type="submit" disabled={saving}>

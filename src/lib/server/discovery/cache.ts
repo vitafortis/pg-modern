@@ -36,6 +36,12 @@ export function redact(candidates: Candidate[]): Candidate[] {
 			!atAddress && c.source.ref
 				? saved.find((s) => sameLogin(s) && s.source.kind === c.source.kind && s.source.ref === c.source.ref)
 				: undefined;
+		// A SQLite snapshot is saved under its local copy's path; match it by container and path.
+		const snapshot =
+			c.sqlite?.via === 'archive'
+				? saved.find((s) => s.snapshot?.container === c.sqlite!.container && s.snapshot?.containerPath === c.sqlite!.containerPath && s.snapshot?.endpoint === c.sqlite!.endpoint)
+				: undefined;
+		if (snapshot) return { ...c, saved: { id: snapshot.id, name: snapshot.name, host: snapshot.host, port: snapshot.port, addressChanged: false } };
 		const match = atAddress ?? moved;
 		// Saved on an address this scan found unreachable, while another one answers.
 		const better = !!atAddress && c.reachable === true && (atAddress.host.toLowerCase() !== c.host.toLowerCase() || atAddress.port !== c.port);

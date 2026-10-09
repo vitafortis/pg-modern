@@ -5,7 +5,7 @@
 <h1 align="center">pg·modern</h1>
 
 <p align="center">
-  A modern, self-hosted database console for the homelab — Postgres, MySQL and MariaDB.<br />
+  A modern, self-hosted database console for the homelab — Postgres, MySQL, MariaDB and SQLite.<br />
   It finds your databases in Docker and <code>.env</code> files, keeps the credentials encrypted, and opens everything read-only.
 </p>
 
@@ -16,6 +16,7 @@
 ## Features
 
 - **Postgres, MySQL and MariaDB**: one console for both protocols, so the databases behind Nextcloud, Ghost, BookStack, Firefly III, PhotoPrism or WordPress sit next to your Postgres ones. MariaDB is told apart from MySQL by its version string.
+- **SQLite**: open the database files behind Jellyfin, Sonarr/Radarr/Prowlarr, Vaultwarden, Home Assistant, Uptime Kuma and friends — found in your scan folders and container mounts, read-only by default, or (opt-in) copied out of containers as read-only snapshots. See [SQLite](#sqlite).
 - **Discover**: finds database containers on your Docker hosts, connection strings in app containers, credentials in `.env`, `compose.yaml` and Terraform files, and every project managed by [Arcane](https://getarcane.app) through its API. Import them in one click.
 - **Encrypted storage**: connection passwords are sealed with AES-256-GCM. Discovered secrets never reach the browser.
 - **Read-only by default**: every query runs in a `READ ONLY` transaction that is always rolled back (on MySQL/MariaDB only reads get through at all). Writes are opt-in per connection or unlocked for a few minutes at a time, and destructive statements still ask first.
@@ -291,6 +292,30 @@ To build it yourself: `docker build -t pg-modern .`
 | ![Setup wizard](docs/screenshots/setup.png) | ![Light theme](docs/screenshots/overview-light.png) |
 | **First run**: setup wizard | **Light theme** |
 
+## SQLite
+
+A SQLite connection is a database file, so there's no host, user or password: choose **SQLite** in the connection dialog and enter the path as pg·modern sees it (inside its container, mount the app's folder — `/opt/appdata:/appdata:ro` — and use `/appdata/sonarr/sonarr.db`). Browsing, the query editor, structure, the schema diagram, autocomplete, history, saved queries and the audit log work as for the other engines. The overview shows the file and `-wal` sizes, page size, journal mode, free pages and the largest tables (sizes from `dbstat` and exact row counts for files up to 1 GB, `sqlite_stat1` estimates above). Explain shows `EXPLAIN QUERY PLAN` as a tree; there's no `EXPLAIN ANALYZE` and no Activity tab, since there's no server.
+
+- **Read-only** connections open the file with `SQLITE_OPEN_READONLY` and a `mode=ro` URI, turn on `PRAGMA query_only`, run each script in a transaction that is rolled back, and only let `SELECT`, `VALUES`, `EXPLAIN` and read-only pragmas through — a read-only handle would still run `VACUUM INTO '/somewhere'` (which writes a new file) and `ATTACH`, so those are refused, as are pragmas that change settings and `load_extension()`. Live databases are never opened `immutable`.
+- **Writes** follow the usual permission model (a read/write connection or a temporary unlock; `DROP`, `DELETE`/`UPDATE` without `WHERE` ask first). They go straight into the file the app is using, so keep them small or stop the app first.
+- **Locks**: statements wait up to 5 s (`PGM_SQLITE_BUSY_TIMEOUT_MS`) for the owning app's write lock instead of failing at once. Queries run off the main thread — introspection on worker threads, scripts in a short-lived child process — so a long query never blocks the UI, and **Cancel** or the statement timeout kills it outright.
+- **WAL databases** (most apps use WAL) need their `-shm` and `-wal` files readable to be read, or a writable folder so SQLite can create them. A WAL database in a folder mounted `:ro` whose app isn't running (so there's no `-shm`) fails to open; pg·modern says so and suggests mounting the folder read-write (the file is still opened read-only) or using a snapshot.
+- pg·modern's own data folder can't be opened as a connection.
+
+**Discovery.** Scan folders are searched for `*.db`, `*.sqlite`, `*.sqlite3`, `*.db3` and well-known names (`home-assistant_v2.db`, `kuma.db`, `db.sqlite3`, …); a file only counts if its first 16 bytes are `SQLite format 3\0`. `-wal`, `-shm`, `-journal`, backups, caches and browser profiles are skipped. Each candidate is labelled with the app its path suggests (`Sonarr · sonarr.db`, `Vaultwarden · db.sqlite3`). On the **Containers** tab, a container's bind mounts that pg·modern can also see under one of its scan folders (the same host path mounted at the same place) are searched too, and opened in place.
+
+### Reading SQLite from containers (opt-in)
+
+Databases in named volumes or folders pg·modern can't mount are reachable through the Docker API's archive endpoint. Turn on **Integrations → SQLite in containers → Read SQLite files from containers via the Docker API**:
+
+- Discovery `HEAD`s known app paths under each container mount (`/config/sonarr.db`, `/data/db.sqlite3`, `/app/data/kuma.db`, `/config/home-assistant_v2.db`, Jellyfin's `/config/data/jellyfin.db`, …; the `X-Docker-Container-Path-Stat` header gives the size), then streams a tar listing of each mount that isn't media or downloads, checking the header of every database-looking file, and stops after 64 MB / 5000 entries per mount.
+- Importing one copies the database — and its `-wal` and a hot `-journal`, if present — with `GET /containers/{id}/archive` into `/data/sqlite-snapshots/`, merges the WAL into the copy and opens it read-only and `immutable`. The workspace shows **Snapshot of container:/path taken at …** with a **Refresh snapshot** button (anyone who can see the connection may refresh; it's audited). Snapshot connections are always read-only: writes would only change the copy, so they can't be unlocked.
+- **Size cap**: database plus `-wal` up to 512 MB by default, configurable on the same card.
+- **Consistency**: this copies a live database. The file is re-copied if it changed during the copy, and including the `-wal` makes the snapshot consistent in practice, but it isn't a transactional backup — refresh to see newer data.
+- **Proxies**: these are `GET`/`HEAD` requests. [tecnativa/docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) allows them with the `CONTAINERS=1` it already needs (its rule `^(/v[\d.]+)?/containers` is a prefix match, and `POST=0` denies every method except GET/HEAD, so `PUT …/archive` — writing into a container — stays blocked). [linuxserver/socket-proxy](https://github.com/linuxserver/docker-socket-proxy) additionally needs `ALLOW_ARCHIVE=1`.
+- **Security implications**: the archive endpoint can read *any* file in *any* container — secrets, keys, `.env` files — not just databases. With `CONTAINERS=1` the proxy already permits that to anything that can reach it; this setting only decides whether pg·modern uses it. Enable it only if you trust everyone who administers pg·modern (only admins can turn it on or import snapshots), and keep the proxy on a private network.
+- **Arcane**: Arcane's API has no container file access; its volume "workspace" download works by starting a helper container and exec'ing into it, which isn't read-only from Docker's point of view, so pg·modern doesn't use it. Point pg·modern at the Docker endpoints (or socket proxies) of those hosts instead.
+
 ## Configuration
 
 | Variable | Default | |
@@ -306,6 +331,7 @@ To build it yourself: `docker build -t pg-modern .`
 | `PGM_MAX_ROWS` | `5000` | Rows returned per result; the rest are truncated |
 | `PGM_IMPORT_MAX_MB` | `50` | Largest CSV file that can be imported. Outside the Docker image (which sets `BODY_SIZE_LIMIT=64M`), also raise the server's `BODY_SIZE_LIMIT` (default `512K`) |
 | `TZ` | `UTC` | Time zone for backup schedules, e.g. `Europe/Berlin` |
+| `PGM_SQLITE_BUSY_TIMEOUT_MS` | `5000` | How long a SQLite statement waits for another process's lock |
 | `PGM_ADMIN_EMAIL`, `PGM_ADMIN_PASSWORD`, `PGM_ADMIN_NAME` | — | Create the first admin on start instead of using the setup wizard |
 | `PGM_AUTH` | — | `disabled` skips the login screen (trusted networks only) |
 | `PGM_LOCAL_LOGIN` | — | `disabled` hides the email/password form (SSO only); `enabled` forces it back on |
@@ -338,7 +364,7 @@ To build it yourself: `docker build -t pg-modern .`
   - grouped keys like `DB_HOST` / `DB_USER` / `DB_PASSWORD`, `PGHOST` / `PGUSER`, `PAPERLESS_DBHOST`, `POSTGRES_*`, `MYSQL_*` / `MARIADB_*` (Nextcloud), `WORDPRESS_DB_*`, Ghost's `database__client=mysql` + `database__connection__*`, PhotoPrism's `PHOTOPRISM_DATABASE_DRIVER=mysql` + `…_SERVER=host:port`, and anything with a `DB_CONNECTION` / `*_DB_TYPE` / `*_DRIVER` naming its engine (Laravel apps like Firefly III and BookStack, Gitea, …). Without an explicit engine, port `3306` or the server container the app points at decides.
   - Compose services, with `${VAR:-default}` interpolation from the neighbouring `.env`
   - Terraform modules (each folder read as a whole): the `postgresql` provider and its login roles, the `mysql` provider (`endpoint`, `username`, `password`), `docker_container` resources, and database URLs in any attribute. `var.*` comes from `*.auto.tfvars`, `terraform.tfvars`, other `*.tfvars` and variable defaults; `local.*` from `locals`. A local `terraform.tfstate` adds computed values (generated passwords) plus RDS / Aurora instances running Postgres, MySQL or MariaDB. Values that can't be resolved are flagged on the candidate.
-- Groups that declare an unsupported engine (`DB_CONNECTION=sqlite`, `database__client=sqlite3`) are ignored.
+- Groups that declare SQLite (`DB_CONNECTION=sqlite`, `database__client=sqlite3`) point at a path inside the app's container, so they're not turned into candidates; the database file itself is found by the SQLite file scan (see [SQLite](#sqlite)).
 
 Scan results stay on the server, and an import refers to them by key, so a discovered password goes straight into the encrypted store.
 
@@ -520,6 +546,7 @@ Nothing runs until you choose to. **Copy** the script to run it elsewhere, or **
   4. Only reads reach the server: `SELECT` / `WITH` / `TABLE` / `VALUES`, `SHOW`, `DESCRIBE`, `EXPLAIN` of a read, `HELP` and `USE` (the default database is reset afterwards). `SELECT … INTO OUTFILE / DUMPFILE / @var`, locking reads (`FOR UPDATE`), `SET`, `LOCK`, `CALL`, `HANDLER`, `LOAD`, `DO`, transaction control and all DDL/DML are refused, including inside `/*! … */` executable comments.
 
   For the strongest guarantee, connect as a user that only has `SELECT` (and `SHOW VIEW`) on the databases you browse; the overview warns when the account could change data. The `PROCESS` privilege lets the Activity tab see every connection and InnoDB lock waits.
+- **Read-only mode on SQLite**: see [SQLite](#sqlite) — read-only open flags and `query_only`, a rolled-back transaction, and an allowlist that also blocks `VACUUM INTO` and `ATTACH`. Snapshots copied out of containers are always read-only.
 - **Postgres-only features**: the visual EXPLAIN tree (MySQL/MariaDB show the server's text or JSON plan instead, and `EXPLAIN ANALYZE` there is limited to reads), and dead tuple / vacuum / per-index scan statistics and extensions in the overview and Activity tab.
 - **Writes** need a read/write connection or a temporary unlock, which uses a separate session pool and expires on its own. `DROP`, `TRUNCATE`, and `DELETE` / `UPDATE` without a `WHERE` must be confirmed; the server enforces this, not just the UI.
 - **Access** is checked on the server for every connection-scoped page and API call; connections a viewer wasn't given don't exist as far as they can tell.

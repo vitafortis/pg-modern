@@ -1,10 +1,10 @@
 export type SslMode = 'disable' | 'prefer' | 'require' | 'verify-full';
 
-/** Wire protocol / driver: `mysql` covers MySQL, MariaDB and Percona. */
-export type Engine = 'postgres' | 'mysql';
+/** Wire protocol / driver: `mysql` covers MySQL, MariaDB and Percona; `sqlite` is a database file. */
+export type Engine = 'postgres' | 'mysql' | 'sqlite';
 
 /** The server product, when known: MariaDB speaks the MySQL protocol but differs in places. */
-export type Flavor = 'postgres' | 'mysql' | 'mariadb';
+export type Flavor = 'postgres' | 'mysql' | 'mariadb' | 'sqlite';
 
 export type SourceKind = 'manual' | 'docker' | 'env' | 'arcane' | 'terraform';
 
@@ -51,6 +51,42 @@ export interface Connection {
 	lastConnectedAt: string | null;
 	/** What the signed-in user may do here (set on responses to the browser). */
 	access?: ConnectionAccess;
+	/** SQLite copied out of a container through the Docker API: always read-only. */
+	snapshot?: SqliteSnapshot;
+}
+
+/**
+ * A SQLite file copied out of a container (Docker archive API) into pg·modern's data
+ * dir. `database` of the connection points at the local copy.
+ */
+export interface SqliteSnapshot {
+	endpoint: string;
+	/** Container name (stable across recreates) and the id it had when copied. */
+	container: string;
+	containerId: string;
+	/** Path of the database inside the container. */
+	containerPath: string;
+	takenAt: string | null;
+	bytes: number | null;
+	/** A -wal file was copied along and merged into the snapshot. */
+	wal: boolean;
+	error: string | null;
+}
+
+/** How a SQLite candidate was found, and where the file lives. */
+export interface SqliteCandidateInfo {
+	/** `file`: on pg·modern's filesystem; `mount`: a container's bind mount also visible here; `archive`: inside a container, copied through the Docker API. */
+	via: 'file' | 'mount' | 'archive';
+	/** App guessed from the path (Jellyfin, Sonarr, Home Assistant, …). */
+	app?: string;
+	sizeBytes?: number;
+	/** The database is in WAL mode (header) or has a -wal file next to it. */
+	wal?: boolean;
+	endpoint?: string;
+	container?: string;
+	containerId?: string;
+	/** Path inside the container. */
+	containerPath?: string;
 }
 
 /** A connection proposed by Docker or .env discovery. */
@@ -85,6 +121,8 @@ export interface Candidate {
 	reachable?: boolean;
 	/** For containers: which networks the database is on and how pg·modern gets to it. */
 	network?: NetworkPath;
+	/** SQLite files: `database` is the path. */
+	sqlite?: SqliteCandidateInfo;
 }
 
 /** pg·modern's own container and the Docker networks it's attached to. */
@@ -273,6 +311,10 @@ export interface Settings {
 	scanPaths: string[];
 	dockerHosts: string[];
 	managers?: Omit<Manager, 'hasKey' | 'fromEnv'>[];
+	/** Opt-in: find SQLite files inside containers and copy snapshots out via the Docker archive API. */
+	sqliteArchive?: boolean;
+	/** Largest SQLite snapshot (db + -wal) to copy, in MB. Default 512. */
+	sqliteSnapshotMaxMb?: number;
 }
 
 export type Role = 'admin' | 'viewer';

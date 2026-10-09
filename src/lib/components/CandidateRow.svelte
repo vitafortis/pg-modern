@@ -3,6 +3,7 @@
 	import Switch from './Switch.svelte';
 	import NetworkPathView from './NetworkPathView.svelte';
 	import EngineBadge from './EngineBadge.svelte';
+	import { bytes } from '#lib/client/format.ts';
 	import type { Candidate } from '#lib/types.ts';
 
 	export interface Choice {
@@ -41,6 +42,11 @@
 		...(candidate.alternates ?? [])
 	]);
 	const chosen = $derived(addresses[choice.address] ?? addresses[0]);
+	const lite = $derived(candidate.sqlite);
+	// Snapshots copied out of containers are always read-only.
+	$effect(() => {
+		if (lite?.via === 'archive' && !choice.readOnly) choice.readOnly = true;
+	});
 </script>
 
 <div
@@ -61,18 +67,31 @@
 		<input class="input h-8 text-[13px] font-medium" bind:value={choice.name} />
 		<p class="mt-1.5 flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-muted-foreground" title="{candidate.user}@…/{candidate.database}">
 			<EngineBadge engine={candidate.engine ?? 'postgres'} flavor={candidate.flavor} />
-			<span class="truncate">{candidate.user} · {candidate.database || 'no default database'}</span>
+			{#if lite}
+				<span class="truncate" title={lite.containerPath ?? candidate.database}>{lite.app ?? 'SQLite file'}{lite.sizeBytes != null ? ` · ${bytes(lite.sizeBytes)}` : ''}</span>
+			{:else}
+				<span class="truncate">{candidate.user} · {candidate.database || 'no default database'}</span>
+			{/if}
 		</p>
 	</div>
 
 	<div class="min-w-0">
+		{#if lite}
+			<p class="input flex h-8 items-center truncate font-mono text-xs" title={lite.via === 'archive' ? `${lite.container}:${lite.containerPath}` : candidate.database}>
+				{lite.via === 'archive' ? `${lite.container}:${lite.containerPath}` : candidate.database}
+			</p>
+		{:else}
 		<select class="input h-8 font-mono text-xs" bind:value={choice.address}>
 			{#each addresses as a, i (i)}
 				<option value={i}>{a.host}:{a.port} — {a.label}</option>
 			{/each}
 		</select>
+		{/if}
 		<div class="mt-1.5 flex flex-wrap items-center gap-1.5">
-			{#if candidate.reachable === true}
+			{#if lite}
+				<span class="badge">{lite.via === 'archive' ? 'snapshot via Docker API' : lite.via === 'mount' ? `container mount${lite.containerPath ? ` · ${lite.containerPath}` : ''}` : 'file'}</span>
+				{#if lite.wal}<span class="badge">WAL</span>{/if}
+			{:else if candidate.reachable === true}
 				<span class="badge badge-success"><span class="size-1.5 rounded-full bg-success"></span>reachable</span>
 			{:else if candidate.reachable === false}
 				<span class="badge"><span class="size-1.5 rounded-full bg-muted-foreground/50"></span>not reachable</span>
@@ -100,7 +119,7 @@
 				{/if}
 			</div>
 		{/if}
-		{#if !candidate.hasPassword && choice.selected}
+		{#if !candidate.hasPassword && choice.selected && !lite}
 			<input class="input mt-2 h-8 font-mono text-xs" type="password" placeholder="Password (optional)" bind:value={choice.password} />
 		{/if}
 		{#each candidate.notes as note (note)}
@@ -109,7 +128,7 @@
 	</div>
 
 	<label class="mt-1.5 flex items-center gap-2 text-xs text-muted-foreground" title="Import as read-only">
-		<Switch bind:checked={choice.readOnly} label="Read-only" />
+		<Switch bind:checked={choice.readOnly} label="Read-only" disabled={lite?.via === 'archive'} />
 		RO
 	</label>
 </div>

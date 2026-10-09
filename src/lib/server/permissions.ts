@@ -27,6 +27,8 @@ export function withAccess(user: User | null, conn: Connection): Connection {
 }
 
 export function accessFor(user: User, conn: Connection): ConnectionAccess {
+	// A SQLite snapshot is a copy: writes would never reach the real database.
+	if (conn.snapshot) return { write: 'never', unlockedUntil: null, readOnly: true };
 	let write: ConnectionAccess['write'];
 	if (user.role === 'admin') write = conn.readOnly ? 'unlock' : 'always';
 	else write = getGrant(user.id, conn.id)?.canWrite ? 'unlock' : 'never';

@@ -4,7 +4,7 @@ export interface StatementRange {
 	text: string;
 }
 
-export type Dialect = 'postgres' | 'mysql';
+export type Dialect = 'postgres' | 'mysql' | 'sqlite';
 
 function hasCode(stmt: string): boolean {
 	return !!stmt.replace(/--[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '').trim();
@@ -25,6 +25,7 @@ const DELIMITER_LINE = /^[ \t]*delimiter[ \t]+(\S+)[ \t]*(?:\r?\n|$)/i;
  */
 export function splitRanges(sql: string, dialect: Dialect = 'postgres'): StatementRange[] {
 	if (dialect === 'mysql') return splitMysql(sql);
+	if (dialect === 'sqlite') return splitSqlite(sql);
 	const out: StatementRange[] = [];
 	let start = 0;
 	let i = 0;
@@ -136,6 +137,77 @@ function splitMysql(sql: string): StatementRange[] {
 			push(start, i);
 			i += delimiter.length;
 			start = i;
+		} else i++;
+	}
+	push(start, n);
+	return out;
+}
+
+/**
+ * SQLite flavour: '…' strings, "…", `…` and […] identifiers, non-nesting comments, and
+ * CREATE TRIGGER bodies (BEGIN … END, with CASE … END inside) kept as one statement.
+ */
+function splitSqlite(sql: string): StatementRange[] {
+	const out: StatementRange[] = [];
+	let start = 0;
+	let i = 0;
+	const n = sql.length;
+	/** Words seen at the start of the current statement (to spot CREATE TRIGGER). */
+	let head: string[] = [];
+	let trigger = false;
+	let inBody = false;
+	let caseDepth = 0;
+
+	const push = (from: number, to: number) => {
+		const raw = sql.slice(from, to);
+		if (!hasCode(raw)) return;
+		const lead = raw.length - raw.trimStart().length;
+		const text = raw.trim();
+		out.push({ from: from + lead, to: from + lead + text.length, text });
+	};
+
+	while (i < n) {
+		const ch = sql[i];
+		const next = sql[i + 1];
+		if (ch === '-' && next === '-') {
+			const end = sql.indexOf('\n', i);
+			i = end === -1 ? n : end + 1;
+		} else if (ch === '/' && next === '*') {
+			const end = sql.indexOf('*/', i + 2);
+			i = end === -1 ? n : end + 2;
+		} else if (ch === "'" || ch === '"' || ch === '`' || ch === '[') {
+			const close = ch === '[' ? ']' : ch;
+			i++;
+			while (i < n) {
+				if (sql[i] === close) {
+					if (close !== ']' && sql[i + 1] === close) i += 2;
+					else break;
+				} else i++;
+			}
+			i++;
+		} else if (/[A-Za-z_]/.test(ch) && !/[\w$]/.test(sql[i - 1] ?? '')) {
+			let j = i + 1;
+			while (j < n && /[\w$]/.test(sql[j])) j++;
+			const word = sql.slice(i, j).toLowerCase();
+			if (head.length < 4) {
+				head.push(word);
+				if (head[0] === 'create' && (word === 'trigger' || (head.length === 3 && head[2] === 'trigger'))) trigger = true;
+			}
+			if (trigger) {
+				if (!inBody && word === 'begin') inBody = true;
+				else if (inBody && word === 'case') caseDepth++;
+				else if (inBody && word === 'end') {
+					if (caseDepth > 0) caseDepth--;
+					else inBody = false;
+				}
+			}
+			i = j;
+		} else if (ch === ';' && !inBody) {
+			push(start, i);
+			start = ++i;
+			head = [];
+			trigger = false;
+			caseDepth = 0;
 		} else i++;
 	}
 	push(start, n);

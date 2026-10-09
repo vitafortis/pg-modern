@@ -7,6 +7,7 @@ import type { PoolConnection } from 'mysql2/promise';
 import { readQuery as pgRead, typeParsers, withClient } from '../pg.ts';
 import { readQuery as myRead, serializeValue, withConnection } from '../mysql/client.ts';
 import { columns as myColumns } from '../mysql/introspect.ts';
+import { interactiveWrite, readQuery as liteRead } from '../sqlite/client.ts';
 import { getConnection } from '../store.ts';
 import { NotFound } from '../pg.ts';
 import type { CompareMode, Dialect, EditKind, TableMeta } from '#lib/rows.ts';
@@ -23,6 +24,7 @@ export async function tableMeta(id: string, schema: string, table: string): Prom
 	const dialect = dialectOf(id);
 	if (dialect === 'mysql') return mysqlMeta(id, schema, table);
 	if (dialect === 'postgres') return pgMeta(id, schema, table);
+	if (dialect === 'sqlite') return sqliteMeta(id, schema, table);
 	throw new Error(`Editing isn’t supported on ${dialect} yet`);
 }
 
@@ -208,6 +210,68 @@ async function mysqlMeta(id: string, schema: string, table: string): Promise<Tab
 	};
 }
 
+// --- SQLite --------------------------------------------------------------------------
+
+const LITE_NUMBER = /\b(INT|REAL|FLOA|DOUB|NUM|DEC)/i;
+const LITE_DATE = /\b(DATE|TIME)/i;
+
+async function sqliteMeta(id: string, schema: string, table: string): Promise<TableMeta> {
+	const rel = await liteRead<{ type: string }>(id, `SELECT type FROM sqlite_schema WHERE name = ? AND type IN ('table', 'view')`, [table]);
+	if (!rel.length) throw new NotFound(`Relation ${table} not found`);
+	const [cols, indexes] = await Promise.all([
+		liteRead<{ name: string; type: string; notnull: number; dflt_value: string | null; pk: number; hidden: number }>(
+			id,
+			`SELECT name, type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?) ORDER BY cid`,
+			[table]
+		),
+		liteRead<{ name: string; unique: number; origin: string; partial: number }>(id, `SELECT name, "unique", origin, partial FROM pragma_index_list(?)`, [table])
+	]);
+	const keys: { primary: boolean; columns: string[] }[] = [];
+	const pk = cols.filter((c) => c.pk > 0).sort((a, b) => a.pk - b.pk).map((c) => c.name);
+	if (pk.length) keys.push({ primary: true, columns: pk });
+	for (const ix of indexes) {
+		if (!ix.unique || ix.partial || ix.origin === 'pk') continue;
+		const parts = await liteRead<{ name: string | null }>(id, `SELECT name FROM pragma_index_info(?) ORDER BY seqno`, [ix.name]);
+		if (parts.every((p) => p.name)) keys.push({ primary: false, columns: parts.map((p) => p.name as string) });
+	}
+	// A rowid table without a declared key is still addressable by rowid, but the editor
+	// only works with real columns; an INTEGER PRIMARY KEY is the rowid anyway.
+	const notNull = new Set(cols.filter((c) => c.notnull || pk.includes(c.name)).map((c) => c.name));
+	const { key, keyKind } = chooseKey(keys, (c) => notNull.has(c));
+	const writable = rel[0].type === 'table';
+	return {
+		dialect: 'sqlite',
+		schema,
+		table,
+		writable,
+		reason: writable ? undefined : 'Only tables can be edited, not views.',
+		key,
+		keyKind,
+		columns: cols
+			.filter((c) => c.hidden !== 1)
+			.map((c) => {
+				const generated = c.hidden === 2 || c.hidden === 3;
+				const binary = /BLOB/i.test(c.type);
+				let kind: EditKind = 'text';
+				if (/^BOOL/i.test(c.type)) kind = 'boolean';
+				else if (/JSON/i.test(c.type)) kind = 'json';
+				else if (LITE_NUMBER.test(c.type)) kind = 'number';
+				else if (LITE_DATE.test(c.type)) kind = 'date';
+				else if (binary) kind = 'binary';
+				return {
+					name: c.name,
+					type: c.type || 'ANY',
+					nullable: !notNull.has(c.name),
+					default: c.dflt_value,
+					editable: !generated && !binary,
+					reason: generated ? 'Generated column' : binary ? 'Binary values can’t be edited here' : undefined,
+					kind,
+					compare: binary || /REAL|FLOA|DOUB/i.test(c.type) ? 'none' : 'eq'
+				};
+			})
+	};
+}
+
 // --- transactions ---------------------------------------------------------------------
 
 export interface Tx {
@@ -263,6 +327,9 @@ export async function writeTransaction<T extends { commit: boolean }>(id: string
 			}
 		});
 	}
+	if (dialect === 'sqlite') {
+		return interactiveWrite(id, (run) => fn({ dialect, run }));
+	}
 	throw new Error(`Writes aren’t supported on ${dialect} yet`);
 }
 
@@ -270,5 +337,6 @@ export async function writeTransaction<T extends { commit: boolean }>(id: string
 export async function runOutsideTransaction(id: string, sql: string): Promise<void> {
 	const dialect = dialectOf(id);
 	if (dialect === 'mysql') await withConnection(id, { readOnly: false }, (c) => c.query(sql));
+	else if (dialect === 'sqlite') await interactiveWrite(id, async (run) => (await run(sql), { commit: true }));
 	else await withClient(id, { readOnly: false }, (c) => c.query(sql));
 }

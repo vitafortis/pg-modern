@@ -239,7 +239,7 @@
 
 <div class="flex h-full flex-col">
 	<div class="min-h-0 flex-1 overflow-y-auto">
-		<PageHeader title="Discover" description="Find Postgres, MySQL and MariaDB servers in containers, .env, compose and Terraform files, and Arcane projects.">
+		<PageHeader title="Discover" description="Find Postgres, MySQL and MariaDB servers in containers, .env, compose and Terraform files, and Arcane projects — and SQLite files in scan folders and containers.">
 			{#snippet actions()}
 				<button
 					class="btn btn-secondary"

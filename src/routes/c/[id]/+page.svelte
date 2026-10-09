@@ -11,6 +11,9 @@
 	import StructureView from '#lib/components/StructureView.svelte';
 	import QueryView from '#lib/components/QueryView.svelte';
 	import ServerOverview from '#lib/components/ServerOverview.svelte';
+	import SqliteOverview from '#lib/components/SqliteOverview.svelte';
+	import SnapshotBar from '#lib/components/SnapshotBar.svelte';
+	import { connectionAddress } from '#lib/engine.ts';
 	import WriteAccess from '#lib/components/WriteAccess.svelte';
 	import EngineBadge from '#lib/components/EngineBadge.svelte';
 	import SchemaDiagram from '#lib/components/SchemaDiagram.svelte';
@@ -45,7 +48,9 @@
 
 	let tree = $state<Tree | null>(null);
 	// The schema to open first: public on Postgres, the connection's database on MySQL.
-	const defaultSchema = $derived(engine === 'mysql' ? conn.database || tree?.schemas[0]?.name || '' : 'public');
+	const defaultSchema = $derived(engine === 'mysql' ? conn.database || tree?.schemas[0]?.name || '' : engine === 'sqlite' ? 'main' : 'public');
+	// SQLite has no server sessions, so no Activity tab.
+	const hasActivity = $derived(engine !== 'sqlite');
 	let treeLoading = $state(false);
 	let showSystem = $state(false);
 	let completion = $state<Record<string, Record<string, string[]>>>({});
@@ -64,6 +69,8 @@
 				saved = JSON.parse(localStorage.getItem(key) ?? 'null');
 			} catch {}
 			tabs = saved?.tabs?.length ? saved.tabs : [{ id: 'overview', kind: 'overview' }];
+			if (!hasActivity) tabs = tabs.filter((t) => t.kind !== 'activity');
+			if (!tabs.length) tabs = [{ id: 'overview', kind: 'overview' }];
 			activeId = saved?.activeId && tabs.some((t) => t.id === saved!.activeId) ? saved.activeId : tabs[0].id;
 			queryCounter = tabs.filter((t) => t.kind === 'query').length + 1;
 		});
@@ -187,7 +194,7 @@
 		<span class="size-2.5 rounded-full" style="background:{COLORS[conn.color] ?? COLORS.violet}; box-shadow:0 0 10px {COLORS[conn.color] ?? COLORS.violet}"></span>
 		<div class="min-w-0">
 			<h1 class="truncate text-[14px] leading-tight font-semibold">{conn.name}</h1>
-			<p class="truncate font-mono text-[11px] text-muted-foreground">{conn.user}@{conn.host}:{conn.port}/{conn.database}</p>
+			<p class="truncate font-mono text-[11px] text-muted-foreground" title={connectionAddress(conn)}>{connectionAddress(conn)}</p>
 		</div>
 		<EngineBadge {engine} flavor={conn.flavor} />
 		<WriteAccess {conn} />
@@ -195,16 +202,18 @@
 			<button class="btn btn-secondary btn-sm" onclick={() => openQuery()} title="New query (⌘K ↵)"><SquareTerminal />New query</button>
 			<SavedQueriesMenu connectionId={conn.id} onopen={(q) => openQuery(q.sql, { id: q.id, name: q.name })} />
 			<button class="btn btn-secondary btn-sm" onclick={openDiagram} title="Schema diagram"><Network />Diagram</button>
-			<button class="btn btn-secondary btn-sm" onclick={openActivity} title="Sessions, locks and sizes"><Activity />Activity</button>
+			{#if hasActivity}<button class="btn btn-secondary btn-sm" onclick={openActivity} title="Sessions, locks and sizes"><Activity />Activity</button>{/if}
 			{#if healthSupported(engine)}
 				<button class="btn btn-secondary btn-sm" onclick={openHealth} title="Index, vacuum, bloat and configuration checks"><HeartPulse />Health</button>
 			{/if}
-			<button class="btn btn-secondary btn-sm" onclick={() => openSchema()} title="Schema snapshots and diff"><History />Schema</button>
+			{#if engine !== 'sqlite'}<button class="btn btn-secondary btn-sm" onclick={() => openSchema()} title="Schema snapshots and diff"><History />Schema</button>{/if}
 			{#if isAdmin()}
 				<button class="btn btn-ghost btn-icon btn-sm" title="Connection settings" onclick={() => (editor.target = conn)}><Settings2 /></button>
 			{/if}
 		</div>
 	</header>
+
+	{#if conn.snapshot}<SnapshotBar {conn} onrefreshed={() => (loadTree(), loadCompletion())} />{/if}
 
 	<div class="flex min-h-0 flex-1">
 		<div class="w-64 shrink-0 border-r border-border bg-surface/60">
@@ -254,7 +263,11 @@
 					<!-- Keep tabs mounted so editor state and scroll position survive switching. -->
 					<div class="h-full {t.id === activeId ? '' : 'hidden'}">
 						{#if t.kind === 'overview'}
-							<ServerOverview connectionId={conn.id} {readOnly} onopen={(s, n) => openTable(s, n)} />
+							{#if engine === 'sqlite'}
+								{#key conn.snapshot?.takenAt}<SqliteOverview connectionId={conn.id} {readOnly} onopen={(s, n) => openTable(s, n)} />{/key}
+							{:else}
+								<ServerOverview connectionId={conn.id} {readOnly} onopen={(s, n) => openTable(s, n)} />
+							{/if}
 						{:else if t.kind === 'table'}
 							<div class="flex h-full flex-col">
 								<div class="flex items-center gap-2 border-b border-border px-3 py-1.5">
