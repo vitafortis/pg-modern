@@ -182,7 +182,7 @@
 					</form>
 
 					<form class="rounded-xl border border-border p-4" onsubmit={addFolder}>
-						<p class="flex items-center gap-2 text-[13px] font-medium"><FolderSearch class="size-4 text-primary" />Folders with .env / compose files</p>
+						<p class="flex items-center gap-2 text-[13px] font-medium"><FolderSearch class="size-4 text-primary" />Folders with .env / compose / Terraform files</p>
 						<div class="mt-2 flex flex-wrap gap-1.5">
 							{#each [...(env?.scanPaths ?? []), ...settings.scanPaths] as p (p)}
 								<span class="badge h-6 font-mono">{p}</span>

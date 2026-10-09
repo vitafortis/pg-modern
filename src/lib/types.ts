@@ -1,6 +1,6 @@
 export type SslMode = 'disable' | 'prefer' | 'require' | 'verify-full';
 
-export type SourceKind = 'manual' | 'docker' | 'env' | 'arcane';
+export type SourceKind = 'manual' | 'docker' | 'env' | 'arcane' | 'terraform';
 
 export interface ConnectionSource {
 	kind: SourceKind;

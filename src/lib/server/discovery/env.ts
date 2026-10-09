@@ -65,7 +65,7 @@ export interface ExtractContext {
 	requireHost?: boolean;
 }
 
-function sslFromParam(v: string | null): SslMode {
+export function sslFromParam(v: string | null): SslMode {
 	switch (v) {
 		case 'disable':
 			return 'disable';
