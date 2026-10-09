@@ -1,10 +1,16 @@
 import { json, redirect } from '@sveltejs/kit';
-import type { Handle } from '@sveltejs/kit/hooks';
+import type { Handle, ServerInit } from '@sveltejs/kit/hooks';
+import '#lib/server/jobs/index.ts';
+import { startJobs } from '#lib/server/jobs.ts';
 import { authenticate } from '#lib/server/auth.ts';
 import { publicUrl } from '#lib/server/origin.ts';
 import { ADMIN_PAGES, adminOnlyApi, connectionIdFromPath } from '#lib/server/access.ts';
 import { canSee } from '#lib/server/permissions.ts';
 import { getConnection } from '#lib/server/store.ts';
+
+export const init: ServerInit = () => {
+	startJobs();
+};
 
 const PUBLIC = ['/login', '/setup', '/auth/oidc/', '/api/auth/', '/api/health'];
 
