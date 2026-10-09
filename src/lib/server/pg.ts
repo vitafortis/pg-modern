@@ -143,7 +143,7 @@ export function closePool(id: string) {
 export class NotFound extends Error {}
 
 /** Plain-language advice for network failures, which otherwise only say ECONNREFUSED etc. */
-const NETWORK_HINTS: Record<string, string> = {
+export const NETWORK_HINTS: Record<string, string> = {
 	ECONNREFUSED:
 		'Nothing accepted the connection on that host and port. The port may not be published, or the database moved — rescan in Discover to find its current address.',
 	ENOTFOUND: 'That host name doesn’t resolve from pg·modern. Container names only resolve when pg·modern shares a Docker network with the database.',

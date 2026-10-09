@@ -45,6 +45,7 @@
 		"#lib/*": "./src/lib/*"
 	},
 	"dependencies": {
+		"mysql2": "^3.24.5",
 		"openid-client": "^6.8.8",
 		"pg": "^8.23.1",
 		"pg-cursor": "^2.22.1",

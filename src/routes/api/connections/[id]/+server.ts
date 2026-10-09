@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import { handler, parseConnectionInput } from '#lib/server/http.ts';
-import { closePool, NotFound } from '#lib/server/pg.ts';
+import { closePool, NotFound } from '#lib/server/engine.ts';
 import { deleteConnection, getConnection, updateConnection } from '#lib/server/store.ts';
 import { audit, withAccess } from '#lib/server/permissions.ts';
 import type { RequestHandler } from './$types';
@@ -20,6 +20,7 @@ export const PUT: RequestHandler = handler(async ({ params, request, locals }) =
 	const changes = [
 		before.readOnly !== conn.readOnly && (conn.readOnly ? 'now read-only' : 'now read/write'),
 		(before.host !== conn.host || before.port !== conn.port) && `address ${conn.host}:${conn.port}`,
+		before.engine !== conn.engine && `engine ${conn.engine}`,
 		input.password !== undefined && 'password changed'
 	].filter(Boolean);
 	audit(locals, 'connection.update', { connection: conn, detail: changes.join(', ') || undefined });

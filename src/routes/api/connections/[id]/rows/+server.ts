@@ -1,6 +1,7 @@
 import { json } from '@sveltejs/kit';
 import { BadRequest, handler } from '#lib/server/http.ts';
-import { browse, type Filter } from '#lib/server/introspect.ts';
+import { browse } from '#lib/server/engine.ts';
+import type { Filter } from '#lib/server/introspect.ts';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = handler(async ({ params, url }) => {

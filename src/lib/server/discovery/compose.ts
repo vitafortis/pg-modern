@@ -1,6 +1,6 @@
 import { parseDocument } from 'yaml';
 import { extractCandidates, fingerprint, interpolate } from './env.ts';
-import { looksLikePostgresServer } from './detect.ts';
+import { detectServer, mysqlLogins, type ServerKind } from './detect.ts';
 import type { Candidate, ConnectionSource, SelfNetworks } from '#lib/types.ts';
 import { composeServiceNetworks, networkPath } from './network.ts';
 
@@ -71,8 +71,8 @@ function publishedPort(ports: ComposeService['ports'], target: number, dockerHos
 }
 
 /**
- * Postgres candidates from a compose file: database services (credentials from their
- * environment) and app services whose connection settings point at them.
+ * Database candidates from a compose file: Postgres / MySQL / MariaDB services
+ * (credentials from their environment) and app services whose settings point at them.
  */
 export async function composeCandidates(content: string, ctx: ComposeContext): Promise<Candidate[]> {
 	const vars = ctx.vars;
@@ -102,50 +102,63 @@ export async function composeCandidates(content: string, ctx: ComposeContext): P
 	};
 
 	// Map service names → reachable addresses, so app services referencing "db" resolve.
-	const servers = new Map<string, { addrs: { host: string; port: number; label: string }[]; server: Candidate }>();
+	const servers = new Map<string, { addrs: { host: string; port: number; label: string }[]; server: Candidate; kind: ServerKind }>();
 	const self = ctx.self ?? { inContainer: false, networks: [] };
 	for (const [name, svc] of Object.entries(services)) {
 		const env = await serviceEnv(svc);
-		const exposed = (svc.ports ?? []).some((p) => /(^|:)5432(\/tcp)?$/.test(typeof p === 'object' ? String(p.target) : String(p)));
-		const isServer = looksLikePostgresServer(interpolate(svc.image ?? '', vars), env, exposed ? ['5432/tcp'] : []);
-		if (!isServer) continue;
-		const internal = Number(env.PGPORT) || 5432;
+		const exposedPort = (port: number) =>
+			(svc.ports ?? []).some((p) => new RegExp(`(^|:)${port}(\\/tcp)?$`).test(typeof p === 'object' ? String(p.target) : String(p)));
+		const exposed = [5432, 3306].filter(exposedPort).map((p) => `${p}/tcp`);
+		const kind = detectServer(interpolate(svc.image ?? '', vars), env, exposed);
+		if (!kind) continue;
+		const internal = kind.port;
 		const pub = publishedPort(svc.ports, internal, ctx.publishedHost ?? 'localhost');
 		const addrs = [
 			...(pub ? [{ ...pub, label: 'published port' }] : []),
 			{ host: svc.container_name ?? name, port: internal, label: 'compose service' }
 		];
 
-		const user = env.POSTGRES_USER || env.POSTGRESQL_USERNAME || 'postgres';
-		const password = env.POSTGRES_PASSWORD || env.POSTGRESQL_PASSWORD || undefined;
-		const notes: string[] = [];
-		if (!password && env.POSTGRES_PASSWORD_FILE) notes.push('Password comes from a secret file; enter it manually.');
-		const base = { host: addrs[0].host, port: addrs[0].port, database: env.POSTGRES_DB || env.POSTGRESQL_DATABASE || user, user };
-		const server: Candidate = {
-			...base,
-			fingerprint: fingerprint(base),
-			name: `${project}/${name}`,
-			password,
-			hasPassword: !!password,
-			sslMode: 'prefer',
-			source: ctx.source,
-			alternates: addrs.slice(1),
-			notes,
-			network: networkPath(
-				{
-					id: name,
-					name: svc.container_name ?? name,
-					networks: Object.fromEntries(composeServiceNetworks(project, svc, doc.networks).map((n) => [n, ''])),
-					published: pub ? [{ host: pub.host, port: pub.port }] : [],
-					running: true
-				},
-				self,
-				internal
-			)
-		};
-		out.push(server);
-		servers.set(name.toLowerCase(), { addrs, server });
-		if (svc.container_name) servers.set(svc.container_name.toLowerCase(), { addrs, server });
+		const network = networkPath(
+			{
+				id: name,
+				name: svc.container_name ?? name,
+				networks: Object.fromEntries(composeServiceNetworks(project, svc, doc.networks).map((n) => [n, ''])),
+				published: pub ? [{ host: pub.host, port: pub.port }] : [],
+				running: true
+			},
+			self,
+			internal
+		);
+		const logins =
+			kind.engine === 'mysql'
+				? mysqlLogins(env)
+				: (() => {
+						const user = env.POSTGRES_USER || env.POSTGRESQL_USERNAME || 'postgres';
+						const password = env.POSTGRES_PASSWORD || env.POSTGRESQL_PASSWORD || undefined;
+						const notes: string[] = [];
+						if (!password && env.POSTGRES_PASSWORD_FILE) notes.push('Password comes from a secret file; enter it manually.');
+						return [{ user, password, database: env.POSTGRES_DB || env.POSTGRESQL_DATABASE || user, notes }];
+					})();
+		const found = logins.map((login): Candidate => {
+			const base = { engine: kind.engine, host: addrs[0].host, port: addrs[0].port, database: login.database, user: login.user };
+			return {
+				...base,
+				...(kind.engine === 'mysql' ? { flavor: kind.flavor } : {}),
+				fingerprint: fingerprint(base),
+				name: logins.length > 1 ? `${project}/${name} (${login.user})` : `${project}/${name}`,
+				password: login.password,
+				hasPassword: !!login.password,
+				sslMode: 'prefer',
+				source: ctx.source,
+				alternates: addrs.slice(1),
+				notes: [...login.notes],
+				network
+			};
+		});
+		out.push(...found);
+		const entry = { addrs, server: found[0], kind };
+		servers.set(name.toLowerCase(), entry);
+		if (svc.container_name) servers.set(svc.container_name.toLowerCase(), entry);
 	}
 
 	for (const [name, svc] of Object.entries(services)) {
@@ -153,6 +166,11 @@ export async function composeCandidates(content: string, ctx: ComposeContext): P
 		for (const c of extractCandidates(await serviceEnv(svc), { label: `${project}/${name}`, source: ctx.source })) {
 			const target = servers.get(c.host.toLowerCase());
 			if (target) {
+				if (c.engine !== target.kind.engine) {
+					c.engine = target.kind.engine;
+					if (target.kind.engine === 'mysql' && c.database === c.user) c.database = target.server.database;
+				}
+				if (target.kind.engine === 'mysql') c.flavor = target.kind.flavor;
 				c.alternates = [{ host: c.host, port: c.port, label: 'as configured' }, ...target.addrs.slice(1)];
 				c.host = target.addrs[0].host;
 				c.port = target.addrs[0].port;

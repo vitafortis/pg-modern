@@ -18,7 +18,7 @@ const FAST = { N: 1024, r: 8, p: 1 };
 
 if (role === 'export') {
 	const a = store.createConnection({ name: 'app', host: 'db', port: 5432, database: 'app', user: 'app', password: 's3cret-app', sslMode: 'prefer', readOnly: true });
-	store.createConnection({ name: 'nopw', host: 'db2', port: 5433, database: 'x', user: 'x', sslMode: 'disable', readOnly: false });
+	store.createConnection({ engine: 'mysql', name: 'nopw', host: 'db2', port: 3306, database: 'x', user: 'x', sslMode: 'disable', readOnly: false }, 'mariadb');
 	// In the backup, admin@x.io is a disabled viewer: restoring must not demote the signed-in admin.
 	store.createUser({ email: 'admin@x.io', role: 'viewer', passwordHash: hashPassword('old-password') });
 	const admin = store.getUser(store.findUserByEmail('admin@x.io')!.id)!;
@@ -60,6 +60,7 @@ if (role === 'export') {
 			zeroAdminError,
 			afterRollback,
 			result,
+			engines: Object.fromEntries(conns.map((c) => [c.name, `${c.engine}/${c.flavor}`])),
 			passwords: Object.fromEntries(conns.map((c) => [c.name, store.getPassword(c.id) ?? null])),
 			me: { role: meAfter.role, disabled: meAfter.disabled, keepsPassword: verifyPassword('new-password', store.getPasswordHash(me.id)!) },
 			owner: store.findUserByEmail('owner@x.io'),

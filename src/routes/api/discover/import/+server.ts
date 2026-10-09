@@ -28,7 +28,9 @@ export const POST: RequestHandler = handler(async ({ request, locals }) => {
 			continue;
 		}
 		created.push(
-			createConnection({
+			createConnection(
+				{
+				engine: c.engine,
 				name: item.name?.trim() || c.name,
 				host: item.host ?? c.host,
 				port: item.port ?? c.port,
@@ -38,7 +40,9 @@ export const POST: RequestHandler = handler(async ({ request, locals }) => {
 				sslMode: c.sslMode,
 				readOnly: item.readOnly !== false,
 				source: c.source
-			})
+				},
+				c.flavor && c.flavor !== 'postgres' ? c.flavor : null
+			)
 		);
 	}
 	for (const c of created) audit(locals, 'connection.import', { connection: c, detail: `${c.user}@${c.host}:${c.port}/${c.database} from ${c.source.kind}` });

@@ -1,8 +1,7 @@
 import { json } from '@sveltejs/kit';
 import { BadRequest, handler } from '#lib/server/http.ts';
-import { runScript } from '#lib/server/pg.ts';
+import { destructiveStatements, runScript } from '#lib/server/engine.ts';
 import { readOnlyFor } from '#lib/server/permissions.ts';
-import { isDestructive, splitStatements } from '#lib/server/sql.ts';
 import { addHistory } from '#lib/server/store.ts';
 import type { RequestHandler } from './$types';
 
@@ -13,7 +12,7 @@ export const POST: RequestHandler = handler(async ({ params, request, locals }) 
 
 	// With write access, statements that drop or wipe data need an explicit second step.
 	if (!readOnly && confirmed !== true) {
-		const destructive = splitStatements(sql).filter(isDestructive);
+		const destructive = destructiveStatements(params.id, sql);
 		if (destructive.length) {
 			return json({ message: 'Confirm destructive statements', confirm: destructive }, { status: 409 });
 		}

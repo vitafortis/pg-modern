@@ -4,9 +4,18 @@ export interface StatementRange {
 	text: string;
 }
 
+export type Dialect = 'postgres' | 'mysql';
+
 function hasCode(stmt: string): boolean {
 	return !!stmt.replace(/--[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '').trim();
 }
+
+function hasMysqlCode(stmt: string): boolean {
+	return !!stmt.replace(/(--\s|#)[^\n]*/g, '').replace(/--$/gm, '').replace(/\/\*(?![!+]|M!)[\s\S]*?\*\//g, '').trim();
+}
+
+/** A `DELIMITER` line, which MySQL clients (not servers) use around procedure bodies. */
+const DELIMITER_LINE = /^[ \t]*delimiter[ \t]+(\S+)[ \t]*(?:\r?\n|$)/i;
 
 /**
  * Splits a SQL script into statements with their source offsets, respecting
@@ -14,7 +23,8 @@ function hasCode(stmt: string): boolean {
  * which executes statements one by one, and the editor, which finds the
  * statement under the cursor.
  */
-export function splitRanges(sql: string): StatementRange[] {
+export function splitRanges(sql: string, dialect: Dialect = 'postgres'): StatementRange[] {
+	if (dialect === 'mysql') return splitMysql(sql);
 	const out: StatementRange[] = [];
 	let start = 0;
 	let i = 0;
@@ -70,8 +80,75 @@ export function splitRanges(sql: string): StatementRange[] {
 	return out;
 }
 
+/**
+ * MySQL flavour: backtick identifiers, backslash escapes in strings, `#` and `-- `
+ * comments, no dollar quoting, and the client-side `DELIMITER` command, so procedure
+ * and trigger bodies containing `;` stay one statement.
+ */
+function splitMysql(sql: string): StatementRange[] {
+	const out: StatementRange[] = [];
+	let delimiter = ';';
+	let start = 0;
+	let i = 0;
+	const n = sql.length;
+
+	const push = (from: number, to: number) => {
+		const raw = sql.slice(from, to);
+		if (!hasMysqlCode(raw)) return;
+		const lead = raw.length - raw.trimStart().length;
+		const text = raw.trim();
+		out.push({ from: from + lead, to: from + lead + text.length, text });
+	};
+	/** True when only whitespace/comments precede `i` in the current statement. */
+	const atStatementStart = () => !hasMysqlCode(sql.slice(start, i));
+
+	while (i < n) {
+		const ch = sql[i];
+		const next = sql[i + 1];
+		if ((ch === 'd' || ch === 'D') && (i === 0 || sql[i - 1] === '\n' || /[ \t]/.test(sql[i - 1])) && atStatementStart()) {
+			const lineStart = sql.lastIndexOf('\n', i - 1) + 1;
+			const m = DELIMITER_LINE.exec(sql.slice(lineStart));
+			if (m && !sql.slice(lineStart, i).trim()) {
+				push(start, lineStart);
+				delimiter = m[1];
+				i = lineStart + m[0].length;
+				start = i;
+				continue;
+			}
+		}
+		if (ch === '#' || (ch === '-' && next === '-' && (i + 2 >= n || /\s/.test(sql[i + 2])))) {
+			const end = sql.indexOf('\n', i);
+			i = end === -1 ? n : end + 1;
+		} else if (ch === '/' && next === '*') {
+			const end = sql.indexOf('*/', i + 2);
+			i = end === -1 ? n : end + 2;
+		} else if (ch === "'" || ch === '"' || ch === '`') {
+			i++;
+			while (i < n) {
+				if (sql[i] === '\\' && ch !== '`') i += 2;
+				else if (sql[i] === ch) {
+					if (sql[i + 1] === ch) i += 2;
+					else break;
+				} else i++;
+			}
+			i++;
+		} else if (sql.startsWith(delimiter, i)) {
+			push(start, i);
+			i += delimiter.length;
+			start = i;
+		} else i++;
+	}
+	push(start, n);
+	return out;
+}
+
+/** Whether a MySQL script uses the client-side DELIMITER command. */
+export function usesDelimiter(sql: string): boolean {
+	return /^[ \t]*delimiter[ \t]+\S+/im.test(sql);
+}
+
 /** The statement containing (or immediately before) `pos`. */
-export function statementAt(sql: string, pos: number): StatementRange | undefined {
-	const ranges = splitRanges(sql);
+export function statementAt(sql: string, pos: number, dialect: Dialect = 'postgres'): StatementRange | undefined {
+	const ranges = splitRanges(sql, dialect);
 	return ranges.find((r) => pos >= r.from && pos <= r.to + 1) ?? ranges.filter((r) => r.to <= pos).at(-1) ?? ranges[0];
 }

@@ -1,6 +1,6 @@
 import { basename } from 'node:path';
-import { extractCandidates, fingerprint, parsePostgresUrl, sslFromParam } from './env.ts';
-import { looksLikePostgresServer } from './detect.ts';
+import { extractCandidates, fingerprint, parseDatabaseUrl, sslFromParam } from './env.ts';
+import { detectServer, mysqlLogins, type ServerKind } from './detect.ts';
 import type { Candidate, ConnectionSource, SslMode } from '#lib/types.ts';
 
 // ───────────────────────────── HCL parsing ─────────────────────────────
@@ -533,7 +533,7 @@ export interface TerraformContext {
 
 const TFVARS = /\.tfvars(\.json)?$/i;
 const STATE = /(^|\/)terraform\.tfstate$/i;
-const PG_URL = /postgres(?:ql)?(?:\+\w+)?:\/\/[^\s"'`<>]+/gi;
+const PG_URL = /(?:jdbc:)?(?:postgres(?:ql)?|mysql|mariadb)(?:\+\w+)?:\/\/[^\s"'`<>]+/gi;
 
 function tfvarsRank(path: string): number {
 	const name = basename(path).toLowerCase();
@@ -558,17 +558,45 @@ interface TfContainer {
 
 function containerCandidates(containers: TfContainer[], project: string, dockerHost: string): Candidate[] {
 	const out: Candidate[] = [];
-	const servers = new Map<string, { addrs: { host: string; port: number; label: string }[]; server: Candidate }>();
+	const servers = new Map<string, { addrs: { host: string; port: number; label: string }[]; server: Candidate; kind: ServerKind }>();
 	const bind = (ip?: string) => (!ip || ip === '0.0.0.0' || ip === '::' ? dockerHost : ip);
 	for (const c of containers) {
-		const exposed = c.ports.some((p) => p.internal === 5432);
-		if (!looksLikePostgresServer(c.image, c.env, exposed ? ['5432/tcp'] : [])) continue;
-		const internal = Number(c.env.PGPORT) || 5432;
+		const exposed = [5432, 3306].filter((port) => c.ports.some((p) => p.internal === port)).map((p) => `${p}/tcp`);
+		const kind = detectServer(c.image, c.env, exposed);
+		if (!kind) continue;
+		const internal = kind.port;
 		const pub = c.ports.find((p) => p.internal === internal && p.external);
 		const addrs = [
 			...(pub ? [{ host: bind(pub.ip), port: pub.external!, label: 'published port' }] : []),
 			{ host: c.name, port: internal, label: 'container name' }
 		];
+		if (kind.engine === 'mysql') {
+			const logins = mysqlLogins(c.env);
+			const found = logins.map((login): Candidate => {
+				const notes = [...login.notes];
+				for (const k of ['MYSQL_USER', 'MYSQL_DATABASE', 'MARIADB_USER', 'MARIADB_DATABASE']) if (c.envMissing[k]) notes.push(`${k} comes from ${c.envMissing[k]}.`);
+				const pwKeys = login.user === 'root' ? ['MYSQL_ROOT_PASSWORD', 'MARIADB_ROOT_PASSWORD'] : ['MYSQL_PASSWORD', 'MARIADB_PASSWORD'];
+				const pwMissing = pwKeys.map((k) => c.envMissing[k]).find(Boolean);
+				if (!login.password && pwMissing) notes.push(`Password comes from ${pwMissing}.`);
+				if (!pub) notes.push('No published port — reachable only from the Docker network.');
+				const base = { engine: 'mysql' as const, host: addrs[0].host, port: addrs[0].port, database: login.database, user: login.user };
+				return {
+					...base,
+					flavor: kind.flavor,
+					fingerprint: fingerprint(base),
+					name: logins.length > 1 ? `${project}/${c.name} (${login.user})` : `${project}/${c.name}`,
+					password: login.password,
+					hasPassword: !!login.password,
+					sslMode: 'prefer',
+					source: c.source,
+					alternates: addrs.slice(1),
+					notes
+				};
+			});
+			out.push(...found);
+			servers.set(c.name.toLowerCase(), { addrs, server: found[0], kind });
+			continue;
+		}
 		const user = c.env.POSTGRES_USER || c.env.POSTGRESQL_USERNAME || 'postgres';
 		const password = c.env.POSTGRES_PASSWORD || c.env.POSTGRESQL_PASSWORD || undefined;
 		const notes: string[] = [];
@@ -579,7 +607,7 @@ function containerCandidates(containers: TfContainer[], project: string, dockerH
 		if (!password && pwMissing) notes.push(`Password comes from ${pwMissing}.`);
 		else if (!password && c.env.POSTGRES_PASSWORD_FILE) notes.push('Password comes from a secret file; enter it manually.');
 		if (!pub) notes.push('No published port — reachable only from the Docker network.');
-		const base = { host: addrs[0].host, port: addrs[0].port, database: c.env.POSTGRES_DB || c.env.POSTGRESQL_DATABASE || user, user };
+		const base = { engine: 'postgres' as const, host: addrs[0].host, port: addrs[0].port, database: c.env.POSTGRES_DB || c.env.POSTGRESQL_DATABASE || user, user };
 		const server: Candidate = {
 			...base,
 			fingerprint: fingerprint(base),
@@ -592,13 +620,18 @@ function containerCandidates(containers: TfContainer[], project: string, dockerH
 			notes
 		};
 		out.push(server);
-		servers.set(c.name.toLowerCase(), { addrs, server });
+		servers.set(c.name.toLowerCase(), { addrs, server, kind });
 	}
 	for (const c of containers) {
 		if (servers.has(c.name.toLowerCase())) continue;
 		for (const cand of extractCandidates(c.env, { label: `${project}/${c.name}`, source: c.source })) {
 			const target = servers.get(cand.host.toLowerCase());
 			if (target) {
+				if (cand.engine !== target.kind.engine) {
+					cand.engine = target.kind.engine;
+					if (target.kind.engine === 'mysql' && cand.database === cand.user) cand.database = target.server.database;
+				}
+				if (target.kind.engine === 'mysql') cand.flavor = target.kind.flavor;
 				cand.alternates = [{ host: cand.host, port: cand.port, label: 'as configured' }, ...target.addrs.slice(1)];
 				cand.host = target.addrs[0].host;
 				cand.port = target.addrs[0].port;
@@ -623,12 +656,12 @@ function strings(v: unknown, path: string, out: { path: string; value: string }[
 	else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) strings(x, path ? `${path}.${k}` : k, out);
 }
 
-/** Candidates for every `postgres://` URL in the given strings. */
+/** Candidates for every `postgres://` / `mysql://` URL in the given strings. */
 function urlCandidates(found: { path: string; value: string }[], label: string, source: ConnectionSource, missing: string[]): Candidate[] {
 	const out: Candidate[] = [];
 	for (const { path, value } of found) {
 		for (const [url] of value.matchAll(PG_URL)) {
-			const parsed = parsePostgresUrl(url.replaceAll(UNRESOLVED, 'tfunresolved'));
+			const parsed = parseDatabaseUrl(url.replaceAll(UNRESOLVED, 'tfunresolved'));
 			if (!parsed) continue;
 			if ([parsed.host, parsed.user, parsed.database].some((x) => x.includes('tfunresolved'))) continue;
 			const notes: string[] = [];
@@ -749,7 +782,7 @@ export function terraformCandidates(files: TerraformFile[], ctx: TerraformContex
 			notes
 		};
 		providers.set(alias, p);
-		const base = { host: p.host, port: p.port, user: p.user, database: p.database };
+		const base = { engine: 'postgres' as const, host: p.host, port: p.port, user: p.user, database: p.database };
 		out.push({
 			...base,
 			fingerprint: fingerprint(base),
@@ -781,7 +814,7 @@ export function terraformCandidates(files: TerraformFile[], ctx: TerraformContex
 			if (!password) continue;
 			const owned = databases.find((d) => scalar(d.block.body.attrs.owner, m).value === role);
 			const database = owned ? (scalar(owned.block.body.attrs.name, m).value ?? owned.block.labels[1]) : provider.database;
-			const base = { host: provider.host, port: provider.port, user: role, database };
+			const base = { engine: 'postgres' as const, host: provider.host, port: provider.port, user: role, database };
 			out.push({
 				...base,
 				fingerprint: fingerprint(base),
@@ -793,6 +826,34 @@ export function terraformCandidates(files: TerraformFile[], ctx: TerraformContex
 				notes: []
 			});
 		}
+	}
+
+	// mysql providers (petoju/mysql, winebarrel/mysql): endpoint = "host:port".
+	for (const { block, file } of blocks) {
+		if (block.type !== 'provider' || block.labels[0] !== 'mysql') continue;
+		const a = block.body.attrs;
+		const notes: string[] = [];
+		const endpoint = scalar(a.endpoint, m);
+		const pw = scalar(a.password, m);
+		const user = scalar(a.username, m);
+		noteMissing('Endpoint', endpoint, notes);
+		noteMissing('Password', pw, notes);
+		noteMissing('Username', user, notes);
+		if (endpoint.value === undefined && !endpoint.missing.length) notes.push('No endpoint set — assuming localhost:3306.');
+		const ep = /^(\[[^\]]+\]|[^:]+)(?::(\d+))?$/.exec(endpoint.value ?? '') ?? undefined;
+		const tls = (scalar(a.tls, m).value ?? '').toLowerCase();
+		const alias = scalar(a.alias, m).value ?? '';
+		const base = { engine: 'mysql' as const, host: ep?.[1].replace(/^\[|\]$/g, '') || 'localhost', port: Number(ep?.[2]) || 3306, user: user.value || 'root', database: '' };
+		out.push({
+			...base,
+			fingerprint: fingerprint(base),
+			name: `${project} · mysql provider${alias ? ` (${alias})` : ''}`,
+			password: pw.value,
+			hasPassword: !!pw.value,
+			sslMode: tls === 'true' ? 'verify-full' : tls === 'skip-verify' || tls === 'preferred' ? 'require' : 'prefer',
+			source: refFor(pw.files, file),
+			notes
+		});
 	}
 
 	// docker_container resources from config.
@@ -867,8 +928,21 @@ export function terraformCandidates(files: TerraformFile[], ctx: TerraformContex
 			const at = inst.attributes ?? {};
 			const label = `${project} · ${r.type}.${r.name}${inst.index_key !== undefined ? `[${JSON.stringify(inst.index_key)}]` : ''}`;
 			const str = (k: string) => (typeof at[k] === 'string' && at[k] ? (at[k] as string) : undefined);
-			let c: { host?: string; port: number; user?: string; password?: string; database?: string; alt?: string } | null = null;
-			if (r.type === 'aws_db_instance' && /postgres/i.test(str('engine') ?? '')) {
+			let c: { host?: string; port: number; user?: string; password?: string; database?: string; alt?: string; engine?: 'mysql'; flavor?: 'mariadb' } | null = null;
+			const dbEngine = str('engine') ?? '';
+			if ((r.type === 'aws_db_instance' || r.type === 'aws_rds_cluster') && /mysql|mariadb/i.test(dbEngine)) {
+				const cluster = r.type === 'aws_rds_cluster';
+				c = {
+					host: cluster ? str('endpoint') : (str('address') ?? str('endpoint')?.split(':')[0]),
+					port: Number(at.port) || 3306,
+					user: cluster ? str('master_username') : str('username'),
+					password: cluster ? str('master_password') : str('password'),
+					database: cluster ? str('database_name') : (str('db_name') ?? str('name')),
+					alt: cluster ? str('reader_endpoint') : undefined,
+					engine: 'mysql',
+					...(/mariadb/i.test(dbEngine) ? { flavor: 'mariadb' as const } : {})
+				};
+			} else if (r.type === 'aws_db_instance' && /postgres/i.test(dbEngine)) {
 				c = {
 					host: str('address') ?? str('endpoint')?.split(':')[0],
 					port: Number(at.port) || 5432,
@@ -895,9 +969,10 @@ export function terraformCandidates(files: TerraformFile[], ctx: TerraformContex
 						: 'No password in the state file; enter it manually.'
 				);
 			}
-			const base = { host: c.host, port: c.port, user: c.user, database: c.database ?? 'postgres' };
+			const base = { engine: c.engine ?? ('postgres' as const), host: c.host, port: c.port, user: c.user, database: c.database ?? (c.engine === 'mysql' ? '' : 'postgres') };
 			out.push({
 				...base,
+				...(c.flavor ? { flavor: c.flavor } : {}),
 				fingerprint: fingerprint(base),
 				name: label,
 				password: c.password,
@@ -910,7 +985,7 @@ export function terraformCandidates(files: TerraformFile[], ctx: TerraformContex
 		}
 	}
 
-	// postgres:// URLs anywhere: config attributes (nested blocks included), variable values, state.
+	// postgres:// and mysql:// URLs anywhere: config attributes (nested blocks included), variable values, state.
 	const sweep = (body: HclBody, label: string, file: string) => {
 		for (const [k, v] of Object.entries(body.attrs)) {
 			const ev = newEval();

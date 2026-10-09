@@ -1,8 +1,8 @@
 import { config } from '../config.ts';
 import { getManagerKey, getSettings } from '../store.ts';
 import { composeCandidates } from './compose.ts';
-import { looksLikePostgresServer } from './detect.ts';
-import { envMap, pickReachable, postgresCredentials, settleAddress, uniqueAddresses, type Address } from './docker.ts';
+import { detectServer, serverLogins } from './detect.ts';
+import { adoptServer, envMap, pickReachable, settleAddress, uniqueAddresses, type Address, type KnownServer } from './docker.ts';
 import { extractCandidates, fingerprint, parseDotenv } from './env.ts';
 import { mapLimit } from './probe.ts';
 import { findSelf, networkPath, type ContainerNetworks } from './network.ts';
@@ -127,7 +127,7 @@ async function scanArcaneContainers(
 
 	const nameOf = (c: ArcaneContainer) => (c.name ?? c.names?.[0] ?? c.id.slice(0, 12)).replace(/^\//, '');
 	const stateOf = (c: ArcaneContainer) => (typeof c.state === 'string' ? c.state : (c.state?.status ?? c.status ?? 'unknown'));
-	const servers = new Map<string, Address[]>();
+	const servers = new Map<string, KnownServer>();
 	const paths = new Map<string, NetworkPath>();
 	const netsOf = (c: ArcaneContainer): ContainerNetworks => ({
 		id: c.id,
@@ -145,8 +145,9 @@ async function scanArcaneContainers(
 		out.set(group, g);
 	};
 
-	const isServer = (c: ArcaneContainer) =>
-		looksLikePostgresServer(c.image, envMap(c.config?.env ?? null), (c.ports ?? []).map((p) => `${p.privatePort}/${p.type ?? 'tcp'}`));
+	const serverKind = (c: ArcaneContainer) =>
+		detectServer(c.image, envMap(c.config?.env ?? null), (c.ports ?? []).map((p) => `${p.privatePort}/${p.type ?? 'tcp'}`));
+	const isServer = (c: ArcaneContainer) => !!serverKind(c);
 
 	for (const pass of ['servers', 'apps'] as const) {
 		for (const c of details) {
@@ -160,8 +161,9 @@ async function scanArcaneContainers(
 			const status = stateOf(c);
 			const source = { kind: 'arcane' as const, ref: `${manager.name} · ${env.name} · ${name}` };
 
-			if (pass === 'servers') {
-				const internal = Number(vars.PGPORT) || 5432;
+			const kind = serverKind(c);
+			if (pass === 'servers' && kind) {
+				const internal = kind.port;
 				const networks = Object.entries(c.networkSettings?.networks ?? {});
 				const addresses = uniqueAddresses<Address>([
 					...(c.ports ?? [])
@@ -179,38 +181,44 @@ async function scanArcaneContainers(
 					self,
 					internal
 				);
-				servers.set(name.toLowerCase(), addresses);
+				const logins = serverLogins(kind, vars);
+				const known: KnownServer = { addresses, kind, database: logins[0].database, user: logins[0].user };
+				servers.set(name.toLowerCase(), known);
 				paths.set(name.toLowerCase(), path);
 				if (project && service) {
-					servers.set(`${project}::${service}`.toLowerCase(), addresses);
+					servers.set(`${project}::${service}`.toLowerCase(), known);
 					paths.set(`${project}::${service}`.toLowerCase(), path);
 				}
 
-				const creds = postgresCredentials(vars);
 				const { primary, alternates, reachable } = await pickReachable(addresses);
-				const notes = [...creds.notes];
-				if (status !== 'running') notes.push(`Container is ${status}.`);
-				const base = { host: primary.host, port: primary.port, database: creds.database, user: creds.user };
-				push(group, status, {
-					...base,
-					fingerprint: fingerprint(base),
-					name: project && service ? `${project}/${service}` : name,
-					password: creds.password,
-					hasPassword: !!creds.password,
-					sslMode: 'prefer',
-					source,
-					alternates,
-					notes,
-					reachable,
-					network: path
-				});
+				const label = project && service ? `${project}/${service}` : name;
+				for (const login of logins) {
+					const notes = [...login.notes];
+					if (status !== 'running') notes.push(`Container is ${status}.`);
+					const base = { engine: kind.engine, host: primary.host, port: primary.port, database: login.database, user: login.user };
+					push(group, status, {
+						...base,
+						...(kind.engine === 'mysql' ? { flavor: kind.flavor } : {}),
+						fingerprint: fingerprint(base),
+						name: logins.length > 1 ? `${label} (${login.user})` : label,
+						password: login.password,
+						hasPassword: !!login.password,
+						sslMode: 'prefer',
+						source,
+						alternates,
+						notes,
+						reachable,
+						network: path
+					});
+				}
 			} else {
 				for (const cand of extractCandidates(vars, { label: project && service ? `${project}/${service}` : name, source })) {
 					const host = cand.host.toLowerCase();
 					const target = (project && servers.get(`${project}::${host}`)) || servers.get(host);
 					cand.network = (project && paths.get(`${project}::${host}`)) || paths.get(host);
-					if (target?.length) {
-						const { primary, alternates, reachable } = await pickReachable(target);
+					if (target?.addresses.length) {
+						adoptServer(cand, target);
+						const { primary, alternates, reachable } = await pickReachable(target.addresses);
 						cand.alternates = uniqueAddresses([{ host: cand.host, port: cand.port, label: 'as configured' }, ...alternates]).filter(
 							(a) => a.host !== primary.host || a.port !== primary.port
 						);

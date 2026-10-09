@@ -73,6 +73,8 @@ test('store export restores on a fresh install with a different master key', () 
 
 	// Passwords were re-sealed with the new install's key.
 	assert.deepEqual(out.passwords, { app: 's3cret-app', nopw: null });
+	// The engine (and detected flavor) travel with the connection.
+	assert.deepEqual(out.engines, { app: 'postgres/null', nopw: 'mysql/mariadb' });
 	assert.deepEqual(out.result.connections, { added: 2, updated: 0 });
 	assert.deepEqual(out.result.users, { added: 2, updated: 0, skipped: 1 });
 

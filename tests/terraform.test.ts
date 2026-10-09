@@ -313,7 +313,60 @@ test('terraform.tfstate: generated passwords, aws_db_instance and docker contain
 	const rds = out.find((c) => c.name.includes('aws_db_instance.main'))!;
 	assert.equal(summary(rds), 'master:rds-pw@main.abc.eu-west-1.rds.amazonaws.com:5432/core');
 	assert.equal(rds.source.ref, '/m/terraform.tfstate');
-	assert.ok(!out.some((c) => c.name.includes('mysql')));
+	// RDS MySQL is a MySQL candidate now, on MySQL's port.
+	const rdsMysql = out.find((c) => c.name.includes('aws_db_instance.mysql'))!;
+	assert.equal(rdsMysql.engine, 'mysql');
+	assert.equal(summary(rdsMysql), 'x:@m:3306/');
+	assert.equal(rds.engine, 'postgres');
 	assert.equal(summary(out.find((c) => c.name.includes('provider'))!), 'postgres:generated@h:5432/postgres');
 	assert.equal(summary(out.find((c) => c.name === 'm/statedb')!), 's:@localhost:5999/s');
+});
+
+test('mysql provider, MariaDB containers and mysql:// URLs', () => {
+	const tf = `
+provider "mysql" {
+  endpoint = "db.lan:3307"
+  username = "admin"
+  password = var.mysql_password
+}
+variable "mysql_password" { default = "tf-pw" }
+
+resource "docker_container" "maria" {
+  name  = "maria"
+  image = "mariadb:11"
+  env   = ["MARIADB_ROOT_PASSWORD=rootpw", "MARIADB_DATABASE=wiki", "MARIADB_USER=wiki", "MARIADB_PASSWORD=wikipw"]
+  ports {
+    internal = 3306
+    external = 33060
+  }
+}
+
+resource "docker_container" "bookstack" {
+  name  = "bookstack"
+  image = "lscr.io/linuxserver/bookstack"
+  env   = ["DB_HOST=maria", "DB_USERNAME=bookstack", "DB_PASSWORD=bspw", "DB_DATABASE=wiki"]
+}
+
+resource "docker_container" "ghost" {
+  name  = "ghost"
+  image = "ghost:5"
+  env   = ["DATABASE_URL=mysql://ghost:gpw@ghostdb:3306/ghost"]
+}
+`;
+	const out = terraformCandidates([{ path: '/m/main.tf', content: tf }], { project: 'm' });
+	const by = (name: string) => out.find((c) => c.name === name);
+	const provider = out.find((c) => c.name.includes('mysql provider'))!;
+	assert.equal(provider.engine, 'mysql');
+	assert.equal(summary(provider), 'admin:tf-pw@db.lan:3307/');
+	// The server container offers its app user and root.
+	assert.equal(summary(by('m/maria (wiki)')!), 'wiki:wikipw@localhost:33060/wiki');
+	assert.equal(summary(by('m/maria (root)')!), 'root:rootpw@localhost:33060/wiki');
+	assert.equal(by('m/maria (root)')!.flavor, 'mariadb');
+	// BookStack has no engine variable; pointing at the MariaDB container makes it MySQL.
+	const app = out.find((c) => c.name.startsWith('m/bookstack'))!;
+	assert.equal(app.engine, 'mysql');
+	assert.equal(summary(app), 'bookstack:bspw@localhost:33060/wiki');
+	const ghost = out.find((c) => c.name.includes('ghost'))!;
+	assert.equal(ghost.engine, 'mysql');
+	assert.equal(summary(ghost), 'ghost:gpw@ghostdb:3306/ghost');
 });

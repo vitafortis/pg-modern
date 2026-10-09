@@ -2,7 +2,7 @@ import { json } from '@sveltejs/kit';
 import { BackupError, decodeBackup } from '#lib/server/backup.ts';
 import { applyRestore, previewRestore, summarizeResult, validatePayload } from '#lib/server/config-backup.ts';
 import { BadRequest, handler } from '#lib/server/http.ts';
-import { closePool } from '#lib/server/pg.ts';
+import { closePool } from '#lib/server/engine.ts';
 import { audit } from '#lib/server/permissions.ts';
 import type { RequestHandler } from './$types';
 

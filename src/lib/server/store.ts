@@ -104,6 +104,14 @@ function migrate(h: DatabaseSync) {
 	if (!userCols.some((c) => c.name === 'connection_access')) {
 		h.exec(`ALTER TABLE users ADD COLUMN connection_access TEXT NOT NULL DEFAULT 'all'`);
 	}
+	const connCols = h.prepare(`SELECT name FROM pragma_table_info('connections')`).all() as { name: string }[];
+	if (!connCols.some((c) => c.name === 'engine')) {
+		h.exec(`ALTER TABLE connections ADD COLUMN engine TEXT NOT NULL DEFAULT 'postgres'`);
+	}
+	if (!connCols.some((c) => c.name === 'flavor')) {
+		// MariaDB vs MySQL, learned from the server's version string.
+		h.exec(`ALTER TABLE connections ADD COLUMN flavor TEXT`);
+	}
 	const historyCols = h.prepare(`SELECT name FROM pragma_table_info('history')`).all() as { name: string }[];
 	if (!historyCols.some((c) => c.name === 'user_id')) {
 		h.exec(`
@@ -165,6 +173,8 @@ type Row = Record<string, unknown>;
 function toConnection(r: Row): Connection {
 	return {
 		id: r.id as string,
+		engine: r.engine === 'mysql' ? 'mysql' : 'postgres',
+		flavor: (r.flavor as Connection['flavor']) ?? null,
 		name: r.name as string,
 		host: r.host as string,
 		port: r.port as number,
@@ -202,12 +212,12 @@ function sealPassword(id: string, password: string | undefined): string | null {
 	return password ? encrypt(JSON.stringify({ password }), `connection:${id}`) : null;
 }
 
-export function createConnection(input: ConnectionInput): Connection {
+export function createConnection(input: ConnectionInput, flavor?: Connection['flavor']): Connection {
 	const id = randomUUID();
 	const now = new Date().toISOString();
 	db().prepare(
-		`INSERT INTO connections (id, name, host, port, database, user, secret, ssl_mode, read_only, color, source_kind, source_ref, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		`INSERT INTO connections (id, name, host, port, database, user, secret, ssl_mode, read_only, color, source_kind, source_ref, created_at, updated_at, engine, flavor)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	).run(
 		id,
 		input.name,
@@ -222,7 +232,9 @@ export function createConnection(input: ConnectionInput): Connection {
 		input.source?.kind ?? 'manual',
 		input.source?.ref ?? null,
 		now,
-		now
+		now,
+		input.engine ?? 'postgres',
+		flavor ?? null
 	);
 	return getConnection(id)!;
 }
@@ -231,7 +243,8 @@ export function updateConnection(id: string, input: ConnectionInput): Connection
 	const existing = getConnection(id);
 	if (!existing) return undefined;
 	db().prepare(
-		`UPDATE connections SET name = ?, host = ?, port = ?, database = ?, user = ?, ssl_mode = ?, read_only = ?, color = ?, updated_at = ? WHERE id = ?`
+		`UPDATE connections SET name = ?, host = ?, port = ?, database = ?, user = ?, ssl_mode = ?, read_only = ?, color = ?, updated_at = ?, engine = ?,
+			flavor = CASE WHEN engine = ? THEN flavor END WHERE id = ?`
 	).run(
 		input.name,
 		input.host,
@@ -242,6 +255,8 @@ export function updateConnection(id: string, input: ConnectionInput): Connection
 		input.readOnly ? 1 : 0,
 		input.color ?? existing.color,
 		new Date().toISOString(),
+		input.engine ?? existing.engine,
+		input.engine ?? existing.engine,
 		id
 	);
 	if (input.password !== undefined) {
@@ -252,6 +267,11 @@ export function updateConnection(id: string, input: ConnectionInput): Connection
 
 export function deleteConnection(id: string): boolean {
 	return Number(db().prepare('DELETE FROM connections WHERE id = ?').run(id).changes) > 0;
+}
+
+/** Records MariaDB vs MySQL once a server has told us; doesn't count as an edit (pools stay open). */
+export function setFlavor(id: string, flavor: Connection['flavor']) {
+	db().prepare('UPDATE connections SET flavor = ? WHERE id = ? AND flavor IS NOT ?').run(flavor, id, flavor);
 }
 
 export function touchConnection(id: string) {

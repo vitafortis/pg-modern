@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import { recall } from '#lib/server/discovery/cache.ts';
 import { BadRequest, handler } from '#lib/server/http.ts';
-import { closePool, NotFound } from '#lib/server/pg.ts';
+import { closePool, NotFound } from '#lib/server/engine.ts';
 import { getConnection, updateConnection } from '#lib/server/store.ts';
 import { audit } from '#lib/server/permissions.ts';
 import type { RequestHandler } from './$types';
@@ -19,6 +19,7 @@ export const POST: RequestHandler = handler(async ({ request, locals }) => {
 	const existing = getConnection(connectionId);
 	if (!existing) throw new NotFound('Connection not found');
 	const updated = updateConnection(connectionId, {
+		engine: existing.engine,
 		name: existing.name,
 		host: host ?? c.host,
 		port: port ?? c.port,

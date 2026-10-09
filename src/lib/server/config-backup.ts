@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { decrypt, encrypt } from './crypto.ts';
 import { BackupError } from './backup.ts';
 import { deleteKv, getKv, getManagerKey, getPassword, setKv, sqlite } from './store.ts';
-import type { Role, Settings, SslMode } from '#lib/types.ts';
+import type { Engine, Flavor, Role, Settings, SslMode } from '#lib/types.ts';
+import { isEngine } from '#lib/engine.ts';
 
 /**
  * What goes into a backup and how it merges back in. history, audit, sessions and
@@ -19,6 +20,9 @@ export interface BackupInclude {
 
 export interface BackupConnection {
 	id: string;
+	/** Missing in backups made before MySQL support: Postgres. */
+	engine?: Engine;
+	flavor?: Flavor | null;
 	name: string;
 	host: string;
 	port: number;
@@ -99,6 +103,8 @@ export function snapshot(include: BackupInclude): BackupPayload {
 	if (include.connections) {
 		payload.connections = (h.prepare('SELECT * FROM connections ORDER BY name COLLATE NOCASE').all() as Row[]).map((r) => ({
 			id: r.id as string,
+			engine: r.engine === 'mysql' ? 'mysql' : 'postgres',
+			flavor: (r.flavor as Flavor | null) ?? null,
 			name: r.name as string,
 			host: r.host as string,
 			port: r.port as number,
@@ -187,6 +193,9 @@ export function validatePayload(raw: unknown): BackupPayload {
 			str(c.user, 'connection user');
 			if (!Number.isInteger(c.port) || c.port < 1 || c.port > 65535) throw new BackupError(`Damaged backup: port of ${c.name}`);
 			if (!SSL_MODES.includes(c.sslMode)) throw new BackupError(`Damaged backup: sslMode of ${c.name}`);
+			if (c.engine === undefined || c.engine === null) c.engine = 'postgres';
+			else if (!isEngine(c.engine)) throw new BackupError(`Damaged backup: engine of ${c.name}`);
+			if (!['postgres', 'mysql', 'mariadb'].includes(String(c.flavor))) c.flavor = null;
 			if (c.password !== null && typeof c.password !== 'string') throw new BackupError(`Damaged backup: password of ${c.name}`);
 		}
 	}
@@ -236,7 +245,7 @@ export function previewRestore(p: BackupPayload, actorId: string | null, meta: {
 		connections: (p.connections ?? []).map((c) => ({
 			id: c.id,
 			name: c.name,
-			target: `${c.user}@${c.host}:${c.port}/${c.database}`,
+			target: `${c.engine === 'mysql' ? 'mysql://' : ''}${c.user}@${c.host}:${c.port}/${c.database}`,
 			hasPassword: !!c.password,
 			status: connExists.get(c.id) ? 'update' : 'new'
 		})),
@@ -332,15 +341,15 @@ export function applyRestore(p: BackupPayload, choice: RestoreChoice, actorId: s
 			const exists = h.prepare('SELECT 1 FROM connections WHERE id = ?');
 			const update = h.prepare(
 				`UPDATE connections SET name = ?, host = ?, port = ?, database = ?, user = ?, secret = ?, ssl_mode = ?, read_only = ?, color = ?,
-				 source_kind = ?, source_ref = ?, updated_at = ? WHERE id = ?`
+				 source_kind = ?, source_ref = ?, engine = ?, flavor = ?, updated_at = ? WHERE id = ?`
 			);
 			const insert = h.prepare(
-				`INSERT INTO connections (id, name, host, port, database, user, secret, ssl_mode, read_only, color, source_kind, source_ref, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+				`INSERT INTO connections (id, name, host, port, database, user, secret, ssl_mode, read_only, color, source_kind, source_ref, engine, flavor, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 			);
 			for (const c of p.connections) {
 				const secret = c.password ? encrypt(JSON.stringify({ password: c.password }), `connection:${c.id}`) : null;
-				const fields = [c.name, c.host, c.port, c.database, c.user, secret, c.sslMode, c.readOnly ? 1 : 0, c.color || 'violet', c.source?.kind || 'manual', c.source?.ref ?? null] as const;
+				const fields = [c.name, c.host, c.port, c.database, c.user, secret, c.sslMode, c.readOnly ? 1 : 0, c.color || 'violet', c.source?.kind || 'manual', c.source?.ref ?? null, c.engine ?? 'postgres', c.flavor ?? null] as const;
 				if (exists.get(c.id)) {
 					update.run(...fields, now, c.id);
 					result.connections.updated++;

@@ -96,3 +96,74 @@ test('invalid YAML is reported, not silently skipped', async () => {
 	assert.equal(out.length, 1);
 	assert.equal(errors.length, 1);
 });
+
+test('MySQL / MariaDB stacks: Nextcloud, WordPress, Ghost and a Postgres neighbour', async () => {
+	const doc = `
+services:
+  db:
+    image: mariadb:11
+    environment:
+      MARIADB_ROOT_PASSWORD: rootpw
+      MARIADB_DATABASE: nextcloud
+      MARIADB_USER: nextcloud
+      MARIADB_PASSWORD: ncpw
+    ports: ["3307:3306"]
+  app:
+    image: nextcloud:29
+    environment:
+      MYSQL_HOST: db
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: ncpw
+      MYSQL_DATABASE: nextcloud
+  wp:
+    image: wordpress
+    environment:
+      WORDPRESS_DB_HOST: wpdb:3306
+      WORDPRESS_DB_USER: wp
+      WORDPRESS_DB_PASSWORD: wppw
+      WORDPRESS_DB_NAME: wordpress
+  wpdb:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/root
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wp
+      MYSQL_PASSWORD: wppw
+  ghost:
+    image: ghost:5
+    environment:
+      database__client: mysql
+      database__connection__host: wpdb
+      database__connection__user: ghost
+      database__connection__password: ghostpw
+      database__connection__database: ghost
+  pg:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: pgpw
+  phpmyadmin:
+    image: phpmyadmin
+    environment:
+      PMA_HOST: db
+      MYSQL_ROOT_PASSWORD: rootpw
+`;
+	const out = await composeCandidates(doc, { project: 'cloud', source: { kind: 'env', ref: 'x' }, vars: {}, readEnvFile: async () => ({}), publishedHost: '10.0.0.5' });
+	const line = (c: (typeof out)[number]) => `${c.engine}${c.flavor && c.flavor !== c.engine ? `/${c.flavor}` : ''} ${c.user}:${c.password ?? ''}@${c.host}:${c.port}/${c.database}`;
+	const by = (name: string) => out.find((c) => c.name === name)!;
+	assert.equal(line(by('cloud/db (nextcloud)')), 'mysql/mariadb nextcloud:ncpw@10.0.0.5:3307/nextcloud');
+	assert.equal(line(by('cloud/db (root)')), 'mysql/mariadb root:rootpw@10.0.0.5:3307/nextcloud');
+	// The root password is a secret file: offered without it, with a note.
+	const wpRoot = by('cloud/wpdb (root)');
+	assert.equal(wpRoot.hasPassword, false);
+	assert.ok(wpRoot.notes.some((n) => /enter it manually/.test(n)));
+	// Ghost points at wpdb with its own user.
+	const ghost = out.find((c) => c.name.startsWith('cloud/ghost'))!;
+	assert.equal(line(ghost), 'mysql ghost:ghostpw@wpdb:3306/ghost');
+	assert.equal(by('cloud/pg').engine, 'postgres');
+	// phpMyAdmin is a client, not a server.
+	assert.ok(!out.some((c) => c.name.startsWith('cloud/phpmyadmin (')));
+	// Apps resolve to the server they point at, so callers can de-duplicate by fingerprint.
+	const nextcloud = out.find((c) => c.name.startsWith('cloud/app'))!;
+	assert.equal(nextcloud.fingerprint, by('cloud/db (nextcloud)').fingerprint);
+	assert.equal(nextcloud.flavor, 'mariadb');
+});

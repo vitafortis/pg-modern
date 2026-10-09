@@ -27,7 +27,7 @@ export function redact(candidates: Candidate[]): Candidate[] {
 	const saved = listConnections();
 	return candidates.map(({ password: _password, ...c }) => {
 		const addresses = [{ host: c.host, port: c.port }, ...(c.alternates ?? [])];
-		const sameLogin = (s: Connection) => s.user === c.user && s.database === c.database;
+		const sameLogin = (s: Connection) => s.engine === c.engine && s.user === c.user && s.database === c.database;
 		const atAddress = saved.find(
 			(s) => sameLogin(s) && addresses.some((a) => a.host.toLowerCase() === s.host.toLowerCase() && a.port === s.port)
 		);

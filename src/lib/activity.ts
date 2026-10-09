@@ -73,6 +73,10 @@ export interface TableStat {
 	lastVacuum: string | null;
 	lastAutoanalyze: string | null;
 	lastAnalyze: string | null;
+	/** MySQL / MariaDB: storage engine, reclaimable space and last write. */
+	storageEngine?: string | null;
+	freeBytes?: number | null;
+	updatedAt?: string | null;
 }
 
 export interface IndexStat {
@@ -97,6 +101,8 @@ export interface ActivityServer {
 
 export interface Activity {
 	fetchedAt: string;
+	/** Absent for Postgres (older responses). */
+	engine?: 'postgres' | 'mysql';
 	server: Section<ActivityServer>;
 	sessions: Section<ActivitySession[]>;
 	locks: Section<ActivityLock[]>;

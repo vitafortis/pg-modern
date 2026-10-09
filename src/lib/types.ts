@@ -1,5 +1,11 @@
 export type SslMode = 'disable' | 'prefer' | 'require' | 'verify-full';
 
+/** Wire protocol / driver: `mysql` covers MySQL, MariaDB and Percona. */
+export type Engine = 'postgres' | 'mysql';
+
+/** The server product, when known: MariaDB speaks the MySQL protocol but differs in places. */
+export type Flavor = 'postgres' | 'mysql' | 'mariadb';
+
 export type SourceKind = 'manual' | 'docker' | 'env' | 'arcane' | 'terraform';
 
 export interface ConnectionSource {
@@ -9,6 +15,8 @@ export interface ConnectionSource {
 }
 
 export interface ConnectionInput {
+	/** Defaults to `postgres`. */
+	engine?: Engine;
 	name: string;
 	host: string;
 	port: number;
@@ -25,6 +33,9 @@ export interface ConnectionInput {
 /** A stored connection as exposed to the browser — never includes the secret. */
 export interface Connection {
 	id: string;
+	engine: Engine;
+	/** Detected from the server version the last time pg·modern connected (MariaDB vs MySQL). */
+	flavor: Flavor | null;
 	name: string;
 	host: string;
 	port: number;
@@ -44,8 +55,11 @@ export interface Connection {
 
 /** A connection proposed by Docker or .env discovery. */
 export interface Candidate {
-	/** Stable fingerprint of host/port/db/user, used to spot duplicates. */
+	/** Stable fingerprint of engine/host/port/db/user, used to spot duplicates. */
 	fingerprint: string;
+	engine: Engine;
+	/** Known from the image or variables (e.g. a mariadb container). */
+	flavor?: Flavor;
 	/** Unique per source + fingerprint; assigned when a scan is cached and used to import. */
 	key?: string;
 	name: string;
@@ -101,7 +115,7 @@ export interface DockerCandidateGroup {
 	error?: string;
 	/** How many containers were inspected on this endpoint. */
 	inspected?: number;
-	/** Containers with no Postgres server or credentials found. */
+	/** Containers with no database server or credentials found. */
 	skipped?: { id: string; name: string; image: string; state: string }[];
 	containers: {
 		id: string;
@@ -196,6 +210,8 @@ export interface QueryResult {
 export interface QueryError {
 	message: string;
 	code?: string;
+	/** MySQL's SQLSTATE (Postgres reports it as `code`). */
+	sqlState?: string;
 	position?: number;
 	detail?: string;
 	hint?: string;
@@ -244,7 +260,7 @@ export interface ManagerScan {
 		/** Diagnostics so a missing database can be explained. */
 		projectsRead?: number;
 		containersInspected?: number;
-		/** Containers with no Postgres server or credentials found. */
+		/** Containers with no database server or credentials found. */
 		skipped?: { name: string; image: string; state: string }[];
 		self?: SelfNetworks;
 		/** Compose files that didn't parse cleanly (results are best-effort). */

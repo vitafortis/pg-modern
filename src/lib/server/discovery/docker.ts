@@ -2,7 +2,7 @@ import { request } from 'node:http';
 import { config, IN_CONTAINER } from '../config.ts';
 import { getSettings } from '../store.ts';
 import { extractCandidates, fingerprint } from './env.ts';
-import { looksLikePostgresServer } from './detect.ts';
+import { detectServer, postgresLogins, serverLogins, type ServerKind } from './detect.ts';
 import { mapLimit, probe } from './probe.ts';
 import { findSelf, networkPath, type ContainerNetworks } from './network.ts';
 import type { Candidate, DockerCandidateGroup, NetworkPath, SelfNetworks } from '#lib/types.ts';
@@ -180,16 +180,25 @@ export async function settleAddress(c: Candidate): Promise<Candidate> {
 }
 
 export function postgresCredentials(env: Record<string, string>) {
-	const notes: string[] = [];
-	const user = env.POSTGRES_USER || env.POSTGRESQL_USERNAME || env.POSTGRESQL_USER || 'postgres';
-	let password = env.POSTGRES_PASSWORD || env.POSTGRESQL_PASSWORD;
-	if (!password && user === 'postgres') password = env.POSTGRESQL_POSTGRES_PASSWORD;
-	const database = env.POSTGRES_DB || env.POSTGRESQL_DATABASE || user;
-	if (!password && (env.POSTGRES_PASSWORD_FILE || env.POSTGRESQL_PASSWORD_FILE)) {
-		notes.push('Password comes from a Docker secret file; enter it manually.');
+	return postgresLogins(env)[0];
+}
+
+/** A database server container found by a scan, so app containers that point at it can be resolved. */
+export interface KnownServer {
+	addresses: Address[];
+	kind: ServerKind;
+	/** Login an app pointing at the server most likely uses (for its default database). */
+	database: string;
+	user: string;
+}
+
+/** An app's candidate takes the engine of the server container it points at. */
+export function adoptServer(cand: Candidate, server: KnownServer) {
+	if (cand.engine !== server.kind.engine) {
+		cand.engine = server.kind.engine;
+		if (cand.database === cand.user && server.kind.engine === 'mysql') cand.database = server.database;
 	}
-	if (env.POSTGRES_HOST_AUTH_METHOD === 'trust') notes.push('Server uses trust auth; no password needed.');
-	return { user, password, database, notes };
+	if (server.kind.engine === 'mysql') cand.flavor = server.kind.flavor;
 }
 
 export async function discoverDocker(): Promise<{ groups: DockerCandidateGroup[]; candidates: Candidate[] }> {
@@ -210,20 +219,19 @@ export async function discoverDocker(): Promise<{ groups: DockerCandidateGroup[]
 				const inspected = kept.map((x) => x.inspect!);
 				const summaries = kept.map((x) => x.summary);
 
-				// Postgres servers first, so app containers can point at them by name.
-				const servers = new Map<string, Address[]>();
+				// Database servers first, so app containers can point at them by name.
+				const servers = new Map<string, KnownServer>();
 				const paths = new Map<string, NetworkPath>();
 				const containers: DockerCandidateGroup['containers'] = [];
 
-				const isServer = (c: ContainerInspect) =>
-					looksLikePostgresServer(c.Config.Image, envMap(c.Config.Env), Object.keys(c.Config.ExposedPorts ?? {}));
+				const serverKind = (c: ContainerInspect) => detectServer(c.Config.Image, envMap(c.Config.Env), Object.keys(c.Config.ExposedPorts ?? {}));
 
 				for (const pass of ['servers', 'apps'] as const) {
 					for (let i = 0; i < inspected.length; i++) {
 						const c = inspected[i];
 						const summary = summaries[i];
-						const server = isServer(c);
-						if ((pass === 'servers') !== server) continue;
+						const kind = serverKind(c);
+						if ((pass === 'servers') !== !!kind) continue;
 						const env = envMap(c.Config.Env);
 						const name = c.Name.replace(/^\//, '');
 						const labels = c.Config.Labels ?? {};
@@ -233,8 +241,8 @@ export async function discoverDocker(): Promise<{ groups: DockerCandidateGroup[]
 						const source = { kind: 'docker' as const, ref: `${endpoint}#${name}` };
 						const candidates: Candidate[] = [];
 
-						if (server) {
-							const internalPort = Number(env.PGPORT) || 5432;
+						if (kind) {
+							const internalPort = kind.port;
 							const addresses = addressesFor(endpoint, c, internalPort);
 							const path = networkPath(
 								{
@@ -247,37 +255,37 @@ export async function discoverDocker(): Promise<{ groups: DockerCandidateGroup[]
 								self,
 								internalPort
 							);
+							const logins = serverLogins(kind, env);
 							// Service names ("db", "postgres") repeat across stacks, so scope them to the compose project.
-							servers.set(name.toLowerCase(), addresses);
+							const known: KnownServer = { addresses, kind, database: logins[0].database, user: logins[0].user };
+							servers.set(name.toLowerCase(), known);
 							paths.set(name.toLowerCase(), path);
 							if (project && service) {
-								servers.set(`${project}::${service}`.toLowerCase(), addresses);
+								servers.set(`${project}::${service}`.toLowerCase(), known);
 								paths.set(`${project}::${service}`.toLowerCase(), path);
 							}
-							if (!addresses.length) {
-								candidates.push(make({ host: name, port: internalPort, label: 'container name' }, [], false));
-							} else {
-								const { primary, alternates, reachable } = await pickReachable(addresses);
-								candidates.push(make(primary, alternates, reachable));
-							}
-							function make(primary: Address, alternates: Address[], reachable: boolean): Candidate {
-								const creds = postgresCredentials(env);
-								const notes = [...creds.notes];
+							const { primary, alternates, reachable } = addresses.length
+								? await pickReachable(addresses)
+								: { primary: { host: name, port: internalPort, label: 'container name' }, alternates: [], reachable: false };
+							// MySQL servers offer the app user and root, when both are set.
+							for (const login of logins) {
+								const notes = [...login.notes];
 								if (summary.State !== 'running') notes.push(`Container is ${summary.State}.`);
-								const base = { host: primary.host, port: primary.port, database: creds.database, user: creds.user };
-								return {
+								const base = { engine: kind.engine, host: primary.host, port: primary.port, database: login.database, user: login.user };
+								candidates.push({
 									...base,
+									...(kind.engine === 'mysql' ? { flavor: kind.flavor } : {}),
 									fingerprint: fingerprint(base),
-									name: label,
-									password: creds.password,
-									hasPassword: !!creds.password,
+									name: logins.length > 1 ? `${label} (${login.user})` : label,
+									password: login.password,
+									hasPassword: !!login.password,
 									sslMode: 'prefer',
 									source,
 									alternates,
 									notes,
 									reachable,
 									network: path
-								};
+								});
 							}
 						} else {
 							for (const cand of extractCandidates(env, { label, source })) {
@@ -287,9 +295,10 @@ export async function discoverDocker(): Promise<{ groups: DockerCandidateGroup[]
 								if (/^(localhost|127\.0\.0\.1|::1)$/.test(host)) {
 									cand.notes.push('Configured as localhost inside the container, which may not be this host.');
 								}
-								if (target?.length) {
+								if (target?.addresses.length) {
+									adoptServer(cand, target);
 									// The app talks to a sibling container; offer the addresses we can actually reach.
-									const { primary, alternates, reachable } = await pickReachable(target);
+									const { primary, alternates, reachable } = await pickReachable(target.addresses);
 									cand.alternates = uniqueAddresses([{ host: cand.host, port: cand.port, label: 'as configured' }, ...alternates]).filter(
 										(a) => a.host !== primary.host || a.port !== primary.port
 									);

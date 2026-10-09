@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import { handler, parseConnectionInput } from '#lib/server/http.ts';
-import { testTarget } from '#lib/server/pg.ts';
+import { testTarget } from '#lib/server/engine.ts';
 import { getPassword } from '#lib/server/store.ts';
 import type { RequestHandler } from './$types';
 

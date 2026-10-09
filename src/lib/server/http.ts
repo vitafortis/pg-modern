@@ -1,5 +1,6 @@
 import { json } from '@sveltejs/kit';
-import { NotFound, toQueryError } from './pg.ts';
+import { NotFound, toQueryError } from './engine.ts';
+import { DEFAULT_PORT, isEngine } from '#lib/engine.ts';
 import type { ConnectionInput, SslMode } from '#lib/types.ts';
 
 /** Wraps an API handler so thrown errors become JSON responses with useful messages. */
@@ -30,17 +31,22 @@ export function parseConnectionInput(body: unknown, { requirePassword = false } 
 		if (typeof v !== 'string' || !v.trim()) throw new BadRequest(`"${k}" is required`);
 		return v.trim();
 	};
-	const port = Number(b.port ?? 5432);
+	if (b.engine !== undefined && !isEngine(b.engine)) throw new BadRequest('"engine" must be postgres or mysql');
+	const engine = isEngine(b.engine) ? b.engine : 'postgres';
+	const port = Number(b.port ?? DEFAULT_PORT[engine]);
 	if (!Number.isInteger(port) || port < 1 || port > 65535) throw new BadRequest('"port" must be 1–65535');
 	const sslMode = (b.sslMode ?? 'prefer') as SslMode;
 	if (!SSL_MODES.includes(sslMode)) throw new BadRequest(`"sslMode" must be one of ${SSL_MODES.join(', ')}`);
 	if (requirePassword && typeof b.password !== 'string') throw new BadRequest('"password" is required');
+	// MySQL logins don't need a default database (the schema tree lists every database).
+	const database = engine === 'mysql' ? (typeof b.database === 'string' ? b.database.trim() : '') : str('database', 'postgres');
 	return {
+		engine,
 		name: str('name', typeof b.host === 'string' ? `${b.host}` : undefined),
 		host: str('host'),
 		port,
-		database: str('database', 'postgres'),
-		user: str('user', 'postgres'),
+		database,
+		user: str('user', engine === 'mysql' ? 'root' : 'postgres'),
 		password: typeof b.password === 'string' ? b.password : undefined,
 		sslMode,
 		readOnly: b.readOnly !== false,
