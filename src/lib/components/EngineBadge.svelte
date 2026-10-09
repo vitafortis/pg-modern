@@ -17,8 +17,8 @@
 	} = $props();
 
 	const label = $derived(engineLabel(engine, flavor));
-	const kind = $derived(engine === 'postgres' ? 'postgres' : flavor === 'mariadb' ? 'mariadb' : 'mysql');
-	const short = { postgres: 'pg', mysql: 'my', mariadb: 'ma' };
+	const kind = $derived(engine === 'postgres' ? 'postgres' : engine === 'sqlite' ? 'sqlite' : flavor === 'mariadb' ? 'mariadb' : 'mysql');
+	const short = { postgres: 'pg', mysql: 'my', mariadb: 'ma', sqlite: 'sq' };
 </script>
 
 {#if variant === 'tag'}
@@ -38,6 +38,9 @@
 	}
 	.engine-mariadb {
 		--engine: oklch(64% 0.09 45);
+	}
+	.engine-sqlite {
+		--engine: oklch(68% 0.13 165);
 	}
 	.engine-dot {
 		width: 6px;

@@ -128,6 +128,11 @@ test('magic header, names and app guessing', () => {
 	assert.equal(files.candidateLabel('/x/sonarr.db'), 'Sonarr · sonarr.db');
 	assert.equal(files.candidateLabel('/data/db.sqlite3', 'vaultwarden'), 'Vaultwarden · db.sqlite3');
 
+	assert.ok(files.isNoiseDatabase('/config/profile/cert9.db'));
+	assert.ok(files.isNoiseDatabase('/config/.mozilla/firefox/x/a169c491.sqlite'));
+	assert.ok(files.isNoiseDatabase('/data/places.sqlite'));
+	assert.ok(!files.isNoiseDatabase('/config/data/jellyfin.db'));
+
 	assert.ok(files.isBulkMount('/media'));
 	assert.ok(files.isBulkMount('/downloads/complete'));
 	assert.ok(files.isBulkMount('/var/run/docker.sock'));
@@ -356,7 +361,6 @@ test('WAL database in a read-only folder without -shm explains itself', async ()
 
 test('discovery walks folders and confirms the header', async () => {
 	writeFileSync(join(dbDir, 'fake.db'), 'not a database at all, just text');
-	writeFileSync(join(dbDir, 'sonarr.db-wal'), '');
 	const found = await findSqliteFiles(join(root, 'files'), 3);
 	assert.deepEqual(
 		found.map((f) => f.path),
@@ -456,7 +460,25 @@ test('archive discovery and snapshots through the Docker API', async () => {
 		await assert.rejects(archive.refreshSnapshot(c.id), /over the 1 MB snapshot limit/);
 		assert.match(store.getSqliteSnapshot(c.id)!.error!, /snapshot limit/);
 		assert.ok(store.getSqliteSnapshot(c.id)!.takenAt, 'the previous snapshot stays usable');
+		await assert.rejects(client.writeTransaction(c.id, [{ sql: 'DELETE FROM monitor' }]), /read-only snapshot/);
 	} finally {
 		server.close();
 	}
+});
+
+test('write transactions commit all or nothing', async () => {
+	const ok = await client.writeTransaction(conn.id, [
+		{ sql: 'INSERT INTO series (title, year) VALUES (?, ?)', params: ['Slow Horses', 2022] },
+		{ sql: 'UPDATE series SET year = ? WHERE title = ?', params: [2023, 'Slow Horses'] }
+	]);
+	assert.deepEqual(ok.changes, [1, 1]);
+	await assert.rejects(
+		client.writeTransaction(conn.id, [
+			{ sql: 'INSERT INTO series (title) VALUES (?)', params: ['Ripley'] },
+			{ sql: 'INSERT INTO series (title) VALUES (?)', params: ['Ripley'] }
+		]),
+		/UNIQUE/
+	);
+	const r = await client.runScript(conn.id, "SELECT count(*) FROM series WHERE title IN ('Slow Horses', 'Ripley')", { readOnly: true });
+	assert.equal(r.results[0].rows[0][0], 1);
 });

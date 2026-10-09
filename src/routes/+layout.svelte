@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { connectionAddress } from '#lib/engine.ts';
 	import '../app.css';
 	import favicon from '#lib/assets/favicon.svg';
 	import { page } from '$app/state';
@@ -150,7 +151,7 @@
 							? 'bg-accent text-foreground'
 							: 'text-muted-foreground hover:bg-accent/70 hover:text-foreground'}"
 					>
-						<a href="/c/{c.id}" title="{c.name} — {c.user}@{c.host}:{c.port}/{c.database}" class="flex h-full min-w-0 flex-1 items-center gap-2.5 px-2.5">
+						<a href="/c/{c.id}" title="{c.name} — {connectionAddress(c)}" class="flex h-full min-w-0 flex-1 items-center gap-2.5 px-2.5">
 							<span class="size-2 shrink-0 rounded-full" style="background:{COLORS[c.color] ?? COLORS.violet}; box-shadow: 0 0 8px {COLORS[c.color] ?? COLORS.violet}"></span>
 							{#if !collapsed}
 								<span class="min-w-0 flex-1 truncate">{c.name}</span>

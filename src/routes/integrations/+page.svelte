@@ -18,6 +18,7 @@
 	} from '@lucide/svelte';
 	import PageHeader from '#lib/components/PageHeader.svelte';
 	import Switch from '#lib/components/Switch.svelte';
+	import SqliteArchiveSettings from '#lib/components/SqliteArchiveSettings.svelte';
 	import { api, errorMessage } from '#lib/client/api.ts';
 	import { toast } from '#lib/client/state.svelte.ts';
 	import type { Manager, Role, Settings } from '#lib/types.ts';
@@ -442,7 +443,7 @@
 				<h2 class="flex items-center gap-2 text-[14px] font-semibold"><FolderSearch class="size-4 text-primary" />Scan folders</h2>
 				<p class="mt-1 text-xs text-muted-foreground">
 					Folders on the machine running pg·modern (inside its container, if it runs in Docker), searched up to {envSources.scanDepth} levels for
-					<code class="font-mono">.env</code> and compose files.
+					<code class="font-mono">.env</code> and compose files, and SQLite databases.
 				</p>
 				<div class="mt-4 space-y-1.5">
 					{#each envSources.scanPaths as p (p)}
@@ -475,5 +476,7 @@
 				</form>
 			</section>
 		</div>
+
+		<SqliteArchiveSettings />
 	</div>
 </div>

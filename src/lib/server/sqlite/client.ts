@@ -215,7 +215,12 @@ class Lane {
 			// Only keep the event loop alive while a call is waiting.
 			child.on('message', () => this.pending.size === 0 && child.channel?.unref());
 		} else {
-			const worker = new Worker(WORKER_SOURCE, { eval: true, workerData: data, resourceLimits: { maxOldGenerationSizeMb: 512 } });
+			const worker = new Worker(WORKER_SOURCE, {
+				eval: true,
+				workerData: data,
+				resourceLimits: { maxOldGenerationSizeMb: 512 },
+				execArgv: ['--disable-warning=ExperimentalWarning']
+			});
 			worker.on('message', onMessage);
 			worker.on('error', fail);
 			worker.on('exit', () => fail(null));
@@ -590,6 +595,36 @@ export async function explainSqlite(id: string, sql: string, opts: { analyze: bo
 		};
 	} finally {
 		if (opts.runId) running.delete(opts.runId);
+		releaseRun(lane);
+	}
+}
+
+// --- write transactions (row editing / imports) ----------------------------------
+
+/**
+ * Runs parameterised statements in one `BEGIN IMMEDIATE … COMMIT` on a writable handle,
+ * rolling back on the first error. Callers check write access first; snapshots refuse.
+ * Returns each statement's changed-row count.
+ */
+export async function writeTransaction(id: string, statements: { sql: string; params?: unknown[] }[]): Promise<{ changes: number[] }> {
+	const conn = connFor(id);
+	if (conn.snapshot) throw new SqliteError('This is a read-only snapshot copied out of a container.', 'READ_ONLY');
+	const lane = acquireRun(conn, false);
+	try {
+		await lane.call({ op: 'exec', sql: 'BEGIN IMMEDIATE' });
+		const changes: number[] = [];
+		for (const s of statements) {
+			const r = await lane.call<RunResult>({ op: 'run', sql: s.sql, params: s.params ?? [], maxRows: 1 });
+			changes.push(r.changes ?? r.rows.length);
+		}
+		await lane.call({ op: 'exec', sql: 'COMMIT' });
+		touchConnection(id);
+		return { changes };
+	} catch (err) {
+		if (err instanceof SqliteError) err.hint ??= toSqliteError(err, conn.database).hint;
+		throw err;
+	} finally {
+		if (!lane.dead) await lane.call({ op: 'exec', sql: 'ROLLBACK', ignoreErrors: true }).catch(() => {});
 		releaseRun(lane);
 	}
 }

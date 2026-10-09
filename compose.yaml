@@ -49,6 +49,9 @@ services:
     # networks: [default, immich_default]
 
   # pg·modern only lists and inspects containers, so it never gets the raw socket.
+  # Note: CONTAINERS=1 also allows GET /containers/{id}/archive (reading files in
+  # containers); pg·modern only uses that if you turn on "Read SQLite files from
+  # containers" under Integrations. POST=0 keeps writes into containers blocked.
   docker-proxy:
     image: tecnativa/docker-socket-proxy:latest
     container_name: pg-modern-docker-proxy

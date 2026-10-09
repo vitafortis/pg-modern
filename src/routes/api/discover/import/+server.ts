@@ -30,7 +30,7 @@ export const POST: RequestHandler = handler(async ({ request, locals }) => {
 		}
 		if (c.engine === 'sqlite' && c.sqlite?.via === 'archive') {
 			// Copied out of the container: always read-only, refreshed on demand.
-			if (!archiveEnabled()) throw new BadRequest('Reading SQLite files from containers is turned off (Settings → SQLite).');
+			if (!archiveEnabled()) throw new BadRequest('Reading SQLite files from containers is turned off (Integrations → SQLite in containers).');
 			const conn = createConnection(
 				{ engine: 'sqlite', name: item.name?.trim() || c.name, host: '', port: 0, database: '', user: '', sslMode: 'disable', readOnly: true, source: c.source },
 				'sqlite'

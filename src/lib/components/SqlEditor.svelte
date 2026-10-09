@@ -5,7 +5,7 @@
 	import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 	import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete';
 	import { bracketMatching, HighlightStyle, indentOnInput, syntaxHighlighting } from '@codemirror/language';
-	import { sql, MariaSQL, MySQL, PostgreSQL } from '@codemirror/lang-sql';
+	import { sql, MariaSQL, MySQL, PostgreSQL, SQLite } from '@codemirror/lang-sql';
 	import { tags as t } from '@lezer/highlight';
 	import { statementAt } from '#lib/sql-split.ts';
 	import type { Engine, Flavor } from '#lib/types.ts';
@@ -71,7 +71,7 @@
 	});
 
 	const sqlLang = (s: typeof schema, e: Engine, f: Flavor | null, d: string) =>
-		sql({ dialect: e === 'mysql' ? (f === 'mariadb' ? MariaSQL : MySQL) : PostgreSQL, schema: s, defaultSchema: d || undefined, upperCaseKeywords: false });
+		sql({ dialect: e === 'mysql' ? (f === 'mariadb' ? MariaSQL : MySQL) : e === 'sqlite' ? SQLite : PostgreSQL, schema: s, defaultSchema: d || undefined, upperCaseKeywords: false });
 
 	/** The selection, or else the statement under the cursor. */
 	function current(): { text: string; scope: 'selection' | 'statement' } | null {

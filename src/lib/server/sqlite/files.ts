@@ -39,7 +39,10 @@ export function isSidecar(name: string): boolean {
  * the like, which are SQLite but not something anyone browses.
  */
 export function isNoiseDatabase(path: string): boolean {
-	return /(^|\/)(thumbs?\.db|places\.sqlite|cookies\.sqlite|favicons\.sqlite|webappsstore\.sqlite|\.DS_Store)$/i.test(path) || /\/(cache|caches|\.cache|Cache)\//.test(path);
+	if (/(^|\/)(thumbs?\.db|\.DS_Store)$/i.test(path) || /\/(cache|caches|\.cache|Cache)\//.test(path)) return true;
+	// Browser profiles (Firefox / Chromium in a "browser in a container" app) are dozens of small SQLite files.
+	if (/\/(\.mozilla|firefox|chromium|google-chrome|profiles?)\//i.test(path)) return true;
+	return /(^|\/)(places|cookies|favicons|webappsstore|formhistory|permissions|content-prefs|storage|bounce-tracking-protection|domain_to_categories)\.sqlite$|(^|\/)(cert9|key4|logins)\.db$/i.test(path);
 }
 
 const APPS: [RegExp, string][] = [

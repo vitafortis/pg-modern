@@ -91,6 +91,6 @@
 
 	<label class="flex items-center gap-2 border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
 		<input type="checkbox" class="accent-[var(--primary)]" bind:checked={showSystem} />
-		{engine === 'mysql' ? 'Show system databases' : 'Show system schemas'}
+		{engine === 'mysql' ? 'Show system databases' : engine === 'sqlite' ? 'Show sqlite_ tables' : 'Show system schemas'}
 	</label>
 </div>

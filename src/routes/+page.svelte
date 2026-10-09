@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { connectionAddress } from '#lib/engine.ts';
 	import { onMount } from 'svelte';
 	import {
 		ArrowUpRight,
@@ -135,7 +136,7 @@
 										{/if}
 									</div>
 									<p class="mt-0.5 truncate font-mono text-xs text-muted-foreground">
-										{c.user}@{c.host}:{c.port}/{c.database}
+										{connectionAddress(c)}
 									</p>
 								</div>
 							</div>

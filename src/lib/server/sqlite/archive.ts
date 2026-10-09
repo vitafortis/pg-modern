@@ -1,6 +1,6 @@
 /**
  * SQLite inside containers, through the Docker API's archive endpoint — opt-in
- * (Settings → "Read SQLite files from containers via the Docker API").
+ * (Integrations → "Read SQLite files from containers via the Docker API").
  *
  * `HEAD /containers/{id}/archive?path=…` stats a path (X-Docker-Container-Path-Stat)
  * and `GET` streams it as a tar archive. Both are GET-class requests, so the read-only
@@ -10,7 +10,7 @@
  */
 import { request, type IncomingMessage } from 'node:http';
 import { createWriteStream } from 'node:fs';
-import { mkdir, rename, rm } from 'node:fs/promises';
+import { mkdir, rename, rm, stat } from 'node:fs/promises';
 import { join, posix } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { config } from '../config.ts';
@@ -214,7 +214,7 @@ export async function fetchFile(endpoint: string, containerId: string, path: str
 	const reader = tarReader((entry) => {
 		if (state.meta || entry.type !== 'file') return null;
 		if (entry.size > maxBytes) {
-			state.failure = new Error(`${path} is ${Math.round(entry.size / 1048576)} MB, over the ${Math.round(maxBytes / 1048576)} MB snapshot limit (Settings → SQLite).`);
+			state.failure = new Error(`${path} is ${Math.round(entry.size / 1048576)} MB, over the ${Math.round(maxBytes / 1048576)} MB snapshot limit (Integrations → SQLite in containers).`);
 			return null;
 		}
 		state.meta = { size: entry.size, mtime: entry.mtime };
@@ -310,7 +310,7 @@ export async function discoverArchive(
 			info: { via: 'archive', sizeBytes: db.size, wal: db.wal, endpoint, container: container.name, containerId: container.id, containerPath: db.path },
 			notes: [
 				'Copied out of the container as a read-only snapshot (Docker archive API).',
-				...(db.size > max ? [`${Math.round(db.size / 1048576)} MB — over the ${Math.round(max / 1048576)} MB snapshot limit; raise it in Settings to import.`] : []),
+				...(db.size > max ? [`${Math.round(db.size / 1048576)} MB — over the ${Math.round(max / 1048576)} MB snapshot limit; raise it in Integrations to import.`] : []),
 				...(container.state !== 'running' ? [`Container is ${container.state}.`] : [])
 			]
 		})
@@ -336,7 +336,7 @@ async function takeSnapshot(id: string): Promise<SqliteSnapshot> {
 	const snap = getSqliteSnapshot(id);
 	if (!conn || !snap) throw new NotFound('Snapshot connection not found');
 	if (!archiveEnabled()) {
-		throw new Error('Reading SQLite files from containers is turned off. An admin can enable it in Settings → SQLite.');
+		throw new Error('Reading SQLite files from containers is turned off. An admin can enable it in Integrations → SQLite in containers.');
 	}
 	const tmp = join(snapshotDir(), `${id}.tmp-${randomUUID().slice(0, 8)}`);
 	try {
@@ -355,7 +355,7 @@ async function takeSnapshot(id: string): Promise<SqliteSnapshot> {
 			const journalStat = await statPath(snap.endpoint, containerId, `${target.path}-journal`);
 			const total = target.stat.size + (walStat?.size ?? 0) + (journalStat?.size ?? 0);
 			if (total > max) {
-				throw new Error(`The database${walStat ? ' and its -wal' : ''} is ${Math.round(total / 1048576)} MB, over the ${Math.round(max / 1048576)} MB snapshot limit (Settings → SQLite).`);
+				throw new Error(`${walStat ? 'The database and its -wal are' : 'The database is'} ${Math.round(total / 1048576)} MB, over the ${Math.round(max / 1048576)} MB snapshot limit (Integrations → SQLite in containers).`);
 			}
 			await rm(`${dbFile}-wal`, { force: true });
 			await rm(`${dbFile}-journal`, { force: true });
@@ -375,8 +375,9 @@ async function takeSnapshot(id: string): Promise<SqliteSnapshot> {
 		await rm(dir, { recursive: true, force: true });
 		await rename(tmp, dir);
 		const final = join(dir, 'db.sqlite');
+		const finalBytes = (await stat(final).catch(() => null))?.size ?? copied.size;
 		setConnectionDatabase(id, final);
-		const next: SqliteSnapshot = { ...snap, containerId, takenAt: new Date().toISOString(), bytes: copied.size, wal: copied.wal, error: null };
+		const next: SqliteSnapshot = { ...snap, containerId, takenAt: new Date().toISOString(), bytes: finalBytes, wal: copied.wal, error: null };
 		setSqliteSnapshot(id, next);
 		closePool(id);
 		return next;

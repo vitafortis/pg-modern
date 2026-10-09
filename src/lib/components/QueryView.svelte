@@ -74,6 +74,7 @@
 	const DESTRUCTIVE = /^\s*(drop|truncate)\b|^\s*(delete|update)\b(?![\s\S]*\bwhere\b)/i;
 
 	const mysql = $derived(engine === 'mysql');
+	const sqlite = $derived(engine === 'sqlite');
 
 	function stripComments(s: string) {
 		const out = s.replace(/--[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
@@ -115,7 +116,7 @@
 
 	/** Statements EXPLAIN ANALYZE would really execute (mirrors the server's `modifiesData`; MySQL only analyzes reads). */
 	function modifiesData(text: string) {
-		if (mysql) return false;
+		if (mysql || sqlite) return false;
 		const s = stripComments(text).trim().toLowerCase();
 		if (!/^(select|values|table|with|\()/.test(s)) return true;
 		return /\b(insert|update|delete|merge)\b/.test(s) || /^select\b[^;]*?\binto\b/.test(s);
@@ -243,9 +244,10 @@
 							<Workflow class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
 							<span class="min-w-0 flex-1">
 								<span class="block text-[13px] font-medium">Explain</span>
-								<span class="block text-[11px] text-muted-foreground">{mysql ? 'The optimizer’s plan.' : 'The planner’s estimates.'} Doesn’t run the query.</span>
+								<span class="block text-[11px] text-muted-foreground">{sqlite ? 'EXPLAIN QUERY PLAN.' : mysql ? 'The optimizer’s plan.' : 'The planner’s estimates.'} Doesn’t run the query.</span>
 							</span>
 						</button>
+						{#if !sqlite}
 						<button class="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-accent" role="menuitem" onclick={() => editor.explainCurrent(true)}>
 							<Gauge class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
 							<span class="min-w-0 flex-1">
@@ -259,6 +261,9 @@
 								</span>
 							</span>
 						</button>
+						{:else}
+							<p class="px-2.5 py-2 text-[11px] text-muted-foreground">SQLite has no EXPLAIN ANALYZE; the plan shows which tables are scanned and which indexes are used.</p>
+						{/if}
 					</div>
 				{/if}
 			</div>
@@ -381,6 +386,7 @@
 					<div class="grid flex-1 place-items-center text-center text-xs text-muted-foreground">
 						<div>
 							<p>Run a query to see results.</p>
+							{#if sqlite}<p class="mt-1">{readOnly ? 'Read-only: SELECT, VALUES, EXPLAIN and read-only PRAGMAs run here, inside a transaction that is rolled back.' : 'Statements change the file directly; an unfinished BEGIN is rolled back.'}</p>{/if}
 							{#if mysql}<p class="mt-1">{readOnly ? 'Read-only: SELECT, SHOW, DESCRIBE and EXPLAIN run here.' : 'Statements run one at a time; DELIMITER blocks are supported.'}</p>{/if}
 							<p class="mt-2"><span class="kbd">⌘↵</span> statement · <span class="kbd">⇧⌘↵</span> everything · <span class="kbd">⌥⌘↵</span> explain analyze · <span class="kbd">⌘S</span> save · <span class="kbd">⌃Space</span> complete</p>
 						</div>
