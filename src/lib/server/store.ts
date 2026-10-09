@@ -73,6 +73,8 @@ function db(): DatabaseSync {
 	`);
 	migrate(handle);
 	migrateSavedQueries(handle);
+	migrateAlerts(handle);
+	migrateSizeHistory(handle);
 	return handle;
 }
 
@@ -701,4 +703,91 @@ export function updateSavedQuery(id: string, input: SavedQueryInput): SavedQuery
 
 export function deleteSavedQuery(id: string): boolean {
 	return Number(db().prepare('DELETE FROM saved_queries WHERE id = ?').run(id).changes) > 0;
+}
+
+// --- alerts and size history (functions live in alerts/store.ts, size-history.ts) ---
+
+function migrateAlerts(h: DatabaseSync) {
+	h.exec(`
+		-- Where notifications go. Secret fields (tokens, webhook URLs) are encrypted in \`secret\`.
+		CREATE TABLE IF NOT EXISTS alert_channels (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			config TEXT NOT NULL DEFAULT '{}',
+			secret TEXT,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			last_sent_at TEXT,
+			last_error TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
+
+		-- A NULL connection_id applies to every connection without its own rule of that kind.
+		CREATE TABLE IF NOT EXISTS alert_rules (
+			id TEXT PRIMARY KEY,
+			kind TEXT NOT NULL,
+			connection_id TEXT REFERENCES connections(id) ON DELETE CASCADE,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			params TEXT NOT NULL DEFAULT '{}',
+			notify_resolved INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
+
+		-- Per (rule, connection) state machine: ok → pending → firing → ok.
+		CREATE TABLE IF NOT EXISTS alert_state (
+			rule_id TEXT NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+			connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+			status TEXT NOT NULL,
+			streak INTEGER NOT NULL DEFAULT 0,
+			since INTEGER,
+			last_notified_at INTEGER,
+			message TEXT,
+			value REAL,
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY (rule_id, connection_id)
+		);
+
+		-- Fired / resolved history. Names are copied so entries outlive rules and connections.
+		CREATE TABLE IF NOT EXISTS alert_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			at TEXT NOT NULL,
+			rule_id TEXT,
+			rule_kind TEXT NOT NULL,
+			connection_id TEXT,
+			connection_name TEXT,
+			event TEXT NOT NULL,
+			severity TEXT NOT NULL,
+			message TEXT NOT NULL,
+			delivered INTEGER NOT NULL DEFAULT 0,
+			error TEXT
+		);
+		CREATE INDEX IF NOT EXISTS alert_events_time ON alert_events(id DESC);
+	`);
+}
+
+function migrateSizeHistory(h: DatabaseSync) {
+	h.exec(`
+		-- Database size per connection: hourly samples (kept 14 days), daily rollups (kept a year).
+		-- \`at\` is the start of the hour or UTC day, in epoch ms.
+		CREATE TABLE IF NOT EXISTS size_samples (
+			connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+			resolution TEXT NOT NULL,
+			at INTEGER NOT NULL,
+			bytes INTEGER NOT NULL,
+			PRIMARY KEY (connection_id, resolution, at)
+		);
+
+		-- The largest tables at each sample.
+		CREATE TABLE IF NOT EXISTS table_size_samples (
+			connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+			resolution TEXT NOT NULL,
+			at INTEGER NOT NULL,
+			schema_name TEXT NOT NULL,
+			table_name TEXT NOT NULL,
+			bytes INTEGER NOT NULL,
+			PRIMARY KEY (connection_id, resolution, at, schema_name, table_name)
+		);
+	`);
 }
