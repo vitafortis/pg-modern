@@ -4,6 +4,7 @@
  * the environment (PGPASSWORD / MYSQL_PWD), never the command line.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
+import { Transform } from 'node:stream';
 import type { Connection, SslMode } from '#lib/types.ts';
 
 export interface Tool {
@@ -133,7 +134,7 @@ export function mysqlSslArgs(tool: Tool, mode: SslMode, plain = false): string[]
 }
 
 function mysqlConnArgs(tool: Tool, t: Target, plain: boolean): string[] {
-	return [`--host=${t.host}`, `--port=${t.port}`, `--user=${t.user}`, '--protocol=TCP', '--connect-timeout=15', ...mysqlSslArgs(tool, t.sslMode, plain)];
+	return [`--host=${t.host}`, `--port=${t.port}`, `--user=${t.user}`, '--protocol=TCP', ...mysqlSslArgs(tool, t.sslMode, plain)];
 }
 
 const mysqlEnv = (t: Target): NodeJS.ProcessEnv => ({ MYSQL_PWD: t.password ?? '' });
@@ -146,7 +147,7 @@ export const MYSQL_SYSTEM_SCHEMAS = new Set(['information_schema', 'performance_
  * plain only for `prefer`). Returns the user databases, for dumping "every database".
  */
 export async function mysqlPreflight(client: Tool, t: Target): Promise<{ plain: boolean; databases: string[] }> {
-	const attempt = (plain: boolean) => capture(client.bin, [...mysqlConnArgs(client, t, plain), '--batch', '--skip-column-names', '--execute=SHOW DATABASES'], mysqlEnv(t));
+	const attempt = (plain: boolean) => capture(client.bin, [...mysqlConnArgs(client, t, plain), '--connect-timeout=15', '--batch', '--skip-column-names', '--execute=SHOW DATABASES'], mysqlEnv(t));
 	let plain = false;
 	let r = await attempt(false);
 	if (r.code !== 0 && t.sslMode === 'prefer' && /ssl|tls/i.test(r.stderr)) {
@@ -186,6 +187,39 @@ export function mysqlRestoreCommand(tool: Tool, t: Target, plain: boolean): Comm
 	const args = [...mysqlConnArgs(tool, t, plain), '--default-character-set=utf8mb4', '--binary-mode'];
 	if (t.database) args.push(`--database=${t.database}`);
 	return { bin: tool.bin, args, env: mysqlEnv(t) };
+}
+
+const DEFINER = /DEFINER=`(?:[^`]|``)*`@`(?:[^`]|``)*`/g;
+
+/**
+ * Removes `DEFINER=user@host` from a mysqldump stream, so views, routines, triggers and
+ * events are created as the restoring user (like pg_restore --no-owner). Without it,
+ * restoring as anyone but the original definer needs SET USER / SUPER. Data lines
+ * (INSERT) are passed through untouched.
+ */
+export function stripDefiners(): Transform {
+	let rest: Buffer = Buffer.alloc(0);
+	const INSERT = Buffer.from('INSERT INTO');
+	const MARK = Buffer.from('DEFINER=');
+	// Works on bytes, so data in any encoding passes through exactly; only DDL lines are decoded.
+	const fix = (line: Buffer): Buffer =>
+		line.subarray(0, INSERT.length).equals(INSERT) || !line.includes(MARK) ? line : Buffer.from(line.toString('utf8').replace(DEFINER, ''), 'utf8');
+	return new Transform({
+		transform(chunk: Buffer, _enc, cb) {
+			const buf = rest.length ? Buffer.concat([rest, chunk]) : chunk;
+			const out: Buffer[] = [];
+			let start = 0;
+			for (let nl = buf.indexOf(10, start); nl >= 0; nl = buf.indexOf(10, start)) {
+				out.push(fix(buf.subarray(start, nl + 1)));
+				start = nl + 1;
+			}
+			rest = Buffer.from(buf.subarray(start));
+			cb(null, out.length ? Buffer.concat(out) : undefined);
+		},
+		flush(cb) {
+			cb(null, rest.length ? fix(rest) : undefined);
+		}
+	});
 }
 
 // --- processes -----------------------------------------------------------------------

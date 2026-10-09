@@ -255,3 +255,27 @@ test('schedule and destination input validation', () => {
 	assert.equal(d.secrets.secretAccessKey, 'k');
 	assert.equal(d.secrets.password, undefined);
 });
+
+test('MySQL restores strip DEFINER clauses but never touch data', async () => {
+	const { stripDefiners } = await import('../src/lib/server/backups/tools.ts');
+	const dump = [
+		"/*!50003 CREATE*/ /*!50017 DEFINER=`root`@`localhost`*/ /*!50003 trigger t1 before insert on items for each row set new.name = upper(new.name) */;;",
+		'CREATE DEFINER=`app``x`@`%` PROCEDURE `cnt`()',
+		"/*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER */",
+		"INSERT INTO `t` VALUES ('DEFINER=`root`@`localhost`','é ü 日本');",
+		'no newline at the end DEFINER=`a`@`b`'
+	].join('\n');
+	const expected = [
+		'/*!50003 CREATE*/ /*!50017 */ /*!50003 trigger t1 before insert on items for each row set new.name = upper(new.name) */;;',
+		'CREATE  PROCEDURE `cnt`()',
+		'/*!50013  SQL SECURITY DEFINER */',
+		"INSERT INTO `t` VALUES ('DEFINER=`root`@`localhost`','é ü 日本');",
+		'no newline at the end '
+	].join('\n');
+	// Feed it in 3-byte chunks, splitting lines and multi-byte characters.
+	const bytes = Buffer.from(dump);
+	const chunks = Array.from({ length: Math.ceil(bytes.length / 3) }, (_, i) => bytes.subarray(i * 3, i * 3 + 3));
+	const out: Buffer[] = [];
+	for await (const c of Readable.from(chunks).pipe(stripDefiners())) out.push(c);
+	assert.equal(Buffer.concat(out).toString('utf8'), expected);
+});

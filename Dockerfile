@@ -17,6 +17,11 @@ ENV NODE_ENV=production \
     PORT=3000 \
     PGM_DATA_DIR=/data \
     NODE_OPTIONS=--disable-warning=ExperimentalWarning
+# Database backups shell out to the client tools. pg_dump must be at least as new as
+# the server (18 dumps and restores 9.2–18); the MariaDB client provides mariadb-dump
+# and mariadb, which also back up MySQL (the connector's caching_sha2_password plugin is
+# needed for MySQL 8+ logins). tzdata lets TZ set the schedules' time zone.
+RUN apk add --no-cache postgresql18-client mariadb-client mariadb-connector-c tzdata
 COPY --from=build /app/build ./build
 COPY --from=build /app/node_modules ./node_modules
 COPY package.json ./

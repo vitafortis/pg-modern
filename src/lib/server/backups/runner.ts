@@ -5,7 +5,7 @@
  */
 import { createGunzip, createGzip } from 'node:zlib';
 import { pipeline } from 'node:stream/promises';
-import { Readable } from 'node:stream';
+import { PassThrough, type Duplex, type Readable } from 'node:stream';
 import { getConnection, getPassword, listConnections } from '../store.ts';
 import { dumpFileName, isDue, nextRunAt, selectForPruning, type BackupRun, type BackupSchedule, type DumpFormat } from '#lib/backups.ts';
 import type { Connection } from '#lib/types.ts';
@@ -20,6 +20,7 @@ import {
 	pgRestoreCommand,
 	requireTool,
 	start,
+	stripDefiners,
 	toolStatus,
 	type Command
 } from './tools.ts';
@@ -126,12 +127,10 @@ async function executeBackup(run: BackupRun, conn: Connection, req: BackupReques
 		}
 
 		const proc = start(cmd, 'ignore');
-		let output: Readable = proc.child.stdout!;
-		if (run.format === 'mysql-sql-gz') {
-			const gz = createGzip();
-			proc.child.stdout!.pipe(gz);
-			output = gz;
-		}
+		// Pipe stdout right away: Node drains (and drops) unread child output once the
+		// process exits, which a quick dump can do before the destination has connected.
+		const output = run.format === 'mysql-sql-gz' ? createGzip() : new PassThrough();
+		proc.child.stdout!.pipe(output);
 		let size = 0;
 		let uploadError: unknown = null;
 		try {
@@ -146,6 +145,10 @@ async function executeBackup(run: BackupRun, conn: Connection, req: BackupReques
 			throw new Error(hint(conn.engine, exit.stderr) || `${cmd.bin} exited with code ${exit.code ?? exit.signal}`);
 		}
 		if (uploadError) throw uploadError;
+		if (!size) {
+			await driver.delete(run.fileName!).catch(() => {});
+			throw new Error(`${cmd.bin} produced no output${exit.stderr ? `: ${exit.stderr}` : ''}`);
+		}
 		store.finishRun(run.id, { status: 'success', sizeBytes: size, databases, warnings: exit.stderr || null });
 	} catch (err) {
 		store.finishRun(run.id, { status: 'failed', error: (err as Error).message, databases });
@@ -257,11 +260,14 @@ async function executeRestore(restore: BackupRun, source: BackupRun, target: Con
 		}
 		const { stream } = await openRunFile(source);
 		const proc = start(cmd, 'pipe');
-		const input = source.format === 'mysql-sql-gz' ? stream.pipe(createGunzip()) : stream;
+		const stages: Duplex[] = [];
+		if (source.format === 'mysql-sql-gz') stages.push(createGunzip());
+		if (target.engine === 'mysql') stages.push(stripDefiners());
+		let sourceComplete = false;
+		(stages.at(-1) ?? stream).once('end', () => (sourceComplete = true));
 		let streamError: unknown = null;
-		await pipeline(input, proc.child.stdin!).catch((err) => {
-			// EPIPE just means the client exited early; its exit code says why.
-			if ((err as NodeJS.ErrnoException).code !== 'EPIPE') streamError = err;
+		await pipeline([stream, ...stages, proc.child.stdin!]).catch((err) => {
+			streamError = err;
 			stream.destroy();
 		});
 		const exit = await proc.done;
@@ -271,7 +277,9 @@ async function executeRestore(restore: BackupRun, source: BackupRun, target: Con
 			return;
 		}
 		if (exit.code !== 0) throw new Error(exit.stderr || `${cmd.bin} exited with code ${exit.code ?? exit.signal}`);
-		if (streamError) throw streamError;
+		// pg_restore may stop reading once it has what it needs, and validates its archive, so
+		// a clean exit is enough. The mysql client must have been fed the whole dump.
+		if (streamError && !(target.engine === 'postgres' || sourceComplete)) throw streamError;
 		store.finishRun(restore.id, { status: 'success', warnings: exit.stderr || null });
 	} catch (err) {
 		store.finishRun(restore.id, { status: 'failed', error: (err as Error).message });
