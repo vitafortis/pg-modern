@@ -315,3 +315,22 @@ export interface AuditEvent {
 	detail: string | null;
 	ip: string | null;
 }
+
+/** A named query; `connectionId` null means it can be used on any connection. */
+export interface SavedQuery {
+	id: string;
+	name: string;
+	description: string | null;
+	sql: string;
+	connectionId: string | null;
+	ownerId: string;
+	ownerEmail: string;
+	/** Visible to everyone who can see the connection. */
+	shared: boolean;
+	createdAt: string;
+	updatedAt: string;
+	/** Set on responses: the signed-in user's own query. */
+	mine?: boolean;
+	/** Set on responses: the signed-in user may edit or delete it (owner or admin). */
+	canEdit?: boolean;
+}
