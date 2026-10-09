@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { Boxes, CircleAlert, Container, FileCode2, FolderSearch, LoaderCircle, Plus, Radar, RefreshCw, Server, X, Download, Power, Wifi } from '@lucide/svelte';
+	import { Boxes, CircleAlert, Container, FileCode2, FolderSearch, LoaderCircle, Plus, Radar, RefreshCw, Server, X, Download, Power, Wifi, EyeOff } from '@lucide/svelte';
 	import PageHeader from '#lib/components/PageHeader.svelte';
 	import CandidateRow, { type Choice } from '#lib/components/CandidateRow.svelte';
 	import { api, errorMessage } from '#lib/client/api.ts';
@@ -24,7 +24,7 @@
 
 	// Top-level filters, remembered per browser.
 	const FILTER_KEY = 'pgm-discover-filters';
-	let filters = $state({ running: false, reachable: false });
+	let filters = $state({ running: false, reachable: false, unsaved: false });
 	$effect.pre(() => {
 		try {
 			Object.assign(filters, JSON.parse(localStorage.getItem(FILTER_KEY) ?? '{}'));
@@ -37,7 +37,20 @@
 		} catch {}
 	});
 
-	const keep = (c: Candidate) => !filters.reachable || c.reachable === true;
+	const keep = (c: Candidate) =>
+		(!filters.reachable || c.reachable === true) && (!filters.unsaved || !c.saved || c.saved.addressChanged);
+
+	/** Points the saved connection at the address chosen for this candidate. */
+	async function relink(c: Candidate, address: { host: string; port: number }) {
+		try {
+			await api.post('/api/discover/relink', { key: c.key, connectionId: c.saved!.id, host: address.host, port: address.port });
+			c.saved = { ...c.saved!, host: address.host, port: address.port, addressChanged: false };
+			await refreshConnections();
+			toast('success', 'Connection updated', `${c.saved.name} now uses ${address.host}:${address.port}`);
+		} catch (err) {
+			toast('error', 'Could not update connection', errorMessage(err));
+		}
+	}
 
 	const visibleDocker = $derived(
 		(docker ?? []).map((g) => ({
@@ -240,10 +253,18 @@
 				>
 					<Wifi />Reachable only
 				</button>
+				<button
+					class="btn btn-sm {filters.unsaved ? 'btn-secondary text-primary' : 'btn-ghost'}"
+					aria-pressed={filters.unsaved}
+					title="Hide databases that are already saved (ones whose address changed stay visible)"
+					onclick={() => (filters.unsaved = !filters.unsaved)}
+				>
+					<EyeOff />Hide saved
+				</button>
 				{#if hidden > 0}
 					<span class="text-[11px] text-muted-foreground">
 						{hidden} hidden ·
-						<button class="text-primary hover:underline" onclick={() => ((filters.running = false), (filters.reachable = false))}>show all</button>
+						<button class="text-primary hover:underline" onclick={() => ((filters.running = false), (filters.reachable = false), (filters.unsaved = false))}>show all</button>
 					</span>
 				{/if}
 			</div>
@@ -290,7 +311,7 @@
 											<div class="divide-y divide-border">
 												{#each c.candidates as cand, i (i)}
 													{#if cand.key && choices[cand.key]}
-														<CandidateRow candidate={cand} bind:choice={choices[cand.key]} />
+														<CandidateRow candidate={cand} bind:choice={choices[cand.key]} onrelink={(a) => relink(cand, a)} />
 													{/if}
 												{/each}
 											</div>
@@ -386,7 +407,7 @@
 													<div class="divide-y divide-border">
 														{#each p.candidates as cand, i (i)}
 															{#if cand.key && choices[cand.key]}
-																<CandidateRow candidate={cand} bind:choice={choices[cand.key]} />
+																<CandidateRow candidate={cand} bind:choice={choices[cand.key]} onrelink={(a) => relink(cand, a)} />
 															{/if}
 														{/each}
 													</div>
@@ -464,7 +485,7 @@
 								<div class="divide-y divide-border">
 									{#each f.candidates as cand, i (i)}
 										{#if cand.key && choices[cand.key]}
-											<CandidateRow candidate={cand} bind:choice={choices[cand.key]} />
+											<CandidateRow candidate={cand} bind:choice={choices[cand.key]} onrelink={(a) => relink(cand, a)} />
 										{/if}
 									{/each}
 								</div>

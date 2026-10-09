@@ -2,9 +2,9 @@ import { config } from '../config.ts';
 import { getManagerKey, getSettings } from '../store.ts';
 import { composeCandidates } from './compose.ts';
 import { looksLikePostgresServer } from './detect.ts';
-import { envMap, pickReachable, postgresCredentials, uniqueAddresses, type Address } from './docker.ts';
+import { envMap, pickReachable, postgresCredentials, settleAddress, uniqueAddresses, type Address } from './docker.ts';
 import { extractCandidates, fingerprint, parseDotenv } from './env.ts';
-import { mapLimit, probe } from './probe.ts';
+import { mapLimit } from './probe.ts';
 import type { Candidate, Manager, ManagerScan } from '#lib/types.ts';
 
 export const ENV_MANAGER_ID = 'env-arcane';
@@ -201,7 +201,7 @@ async function scanArcaneContainers(
 						cand.reachable = reachable;
 						cand.fingerprint = fingerprint(cand);
 					} else {
-						cand.reachable = await probe(cand.host, cand.port);
+						await settleAddress(cand);
 					}
 					push(group, status, cand);
 				}
@@ -242,6 +242,21 @@ async function scanArcane(manager: Manager, apiKey: string): Promise<{ scan: Man
 		const host = environmentHost(env, manager.url);
 		const entry: ManagerScan['environments'][number] = { id: env.id, name: env.name ?? env.id, host, projects: [] };
 		scan.environments.push(entry);
+		// Running containers first: their ports and environment are what's actually deployed,
+		// so they win over what a project's compose file says for the same service.
+		let live: Awaited<ReturnType<typeof scanArcaneContainers>> | undefined;
+		try {
+			live = await scanArcaneContainers(client, manager, entry);
+			entry.containersInspected = live.inspected;
+			entry.skipped = live.skipped;
+		} catch (err) {
+			const message = (err as Error).message;
+			entry.warning = /rejected the API key|403/.test(message)
+				? 'Add containers:list and containers:read to the API key to also find databases that aren’t Arcane projects.'
+				: `Container scan failed: ${message}`;
+		}
+		const liveNames = new Set(live?.groups.flatMap((g) => g.candidates.map((c) => c.name.toLowerCase())) ?? []);
+
 		try {
 			const projects = await client.list<ArcaneProject>(`/environments/${encodeURIComponent(env.id)}/projects`);
 			entry.projectsRead = projects.length;
@@ -251,43 +266,36 @@ async function scanArcane(manager: Manager, apiKey: string): Promise<{ scan: Man
 				const detail = await client.data<ArcaneProject>(`${base}/compose`).catch(() => client.data<ArcaneProject>(base));
 				if (!detail.composeContent) return;
 				const vars = parseDotenv(detail.envContent ?? '');
-				const candidates = await composeCandidates(detail.composeContent, {
-					project: p.name,
-					source: { kind: 'arcane', ref: `${manager.name} · ${entry.name} · ${p.name}` },
-					vars,
-					// Arcane keeps the project's env next to the compose file; other env_files aren't exposed.
-					readEnvFile: async (path) => (/^(\.\/)?\.env$/.test(path) ? vars : {}),
-					publishedHost: host,
-					onParseError: (message) => (entry.parseErrors ??= []).push({ project: p.name, message })
-				});
+				const candidates = (
+					await composeCandidates(detail.composeContent, {
+						project: p.name,
+						source: { kind: 'arcane', ref: `${manager.name} · ${entry.name} · ${p.name}` },
+						vars,
+						// Arcane keeps the project's env next to the compose file; other env_files aren't exposed.
+						readEnvFile: async (path) => (/^(\.\/)?\.env$/.test(path) ? vars : {}),
+						publishedHost: host,
+						onParseError: (message) => (entry.parseErrors ??= []).push({ project: p.name, message })
+					})
+				).filter((c) => !liveNames.has(c.name.toLowerCase()));
 				if (!candidates.length) return;
 				const unique = candidates.filter((c, i) => candidates.findIndex((x) => x.fingerprint === c.fingerprint) === i);
-				await Promise.all(unique.map(async (c) => (c.reachable = await probe(c.host, c.port))));
+				await Promise.all(unique.map(settleAddress));
 				entry.projects.push({ id: p.id, name: p.name, status: p.status ?? detail.status ?? 'unknown', candidates: unique });
 				all.push(...unique);
 			});
 		} catch (err) {
 			entry.error = (err as Error).message;
 		}
-		try {
-			const seen = new Set(entry.projects.flatMap((p) => p.candidates.map((c) => c.fingerprint)));
-			const scanned = await scanArcaneContainers(client, manager, entry);
-			entry.containersInspected = scanned.inspected;
-			entry.skipped = scanned.skipped;
-			for (const g of scanned.groups) {
-				const fresh = g.candidates.filter((c, i, arr) => !seen.has(c.fingerprint) && arr.findIndex((x) => x.fingerprint === c.fingerprint) === i);
-				if (!fresh.length) continue;
-				fresh.forEach((c) => seen.add(c.fingerprint));
-				const existing = entry.projects.find((p) => p.name === g.project);
-				if (existing) existing.candidates.push(...fresh);
-				else entry.projects.push({ id: `container:${g.project}`, name: g.project, status: g.status, candidates: fresh });
-				all.push(...fresh);
-			}
-		} catch (err) {
-			const message = (err as Error).message;
-			entry.warning = /rejected the API key|403/.test(message)
-				? 'Add containers:list and containers:read to the API key to also find databases that aren’t Arcane projects.'
-				: `Container scan failed: ${message}`;
+
+		const seen = new Set(entry.projects.flatMap((p) => p.candidates.map((c) => c.fingerprint)));
+		for (const g of live?.groups ?? []) {
+			const fresh = g.candidates.filter((c, i, arr) => !seen.has(c.fingerprint) && arr.findIndex((x) => x.fingerprint === c.fingerprint) === i);
+			if (!fresh.length) continue;
+			fresh.forEach((c) => seen.add(c.fingerprint));
+			const existing = entry.projects.find((p) => p.name === g.project);
+			if (existing) existing.candidates.push(...fresh);
+			else entry.projects.push({ id: `container:${g.project}`, name: g.project, status: g.status, candidates: fresh });
+			all.push(...fresh);
 		}
 		entry.projects.sort((a, b) => a.name.localeCompare(b.name));
 	}

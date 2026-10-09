@@ -129,15 +129,26 @@ export function closePool(id: string) {
 
 export class NotFound extends Error {}
 
+/** Plain-language advice for network failures, which otherwise only say ECONNREFUSED etc. */
+const NETWORK_HINTS: Record<string, string> = {
+	ECONNREFUSED:
+		'Nothing accepted the connection on that host and port. The port may not be published, or the database moved — rescan in Discover to find its current address.',
+	ENOTFOUND: 'That host name doesn’t resolve from pg·modern. Container names only resolve when pg·modern shares a Docker network with the database.',
+	EAI_AGAIN: 'That host name doesn’t resolve from pg·modern. Container names only resolve when pg·modern shares a Docker network with the database.',
+	ETIMEDOUT: 'The host didn’t answer. A firewall may be dropping traffic, or the address is on a network pg·modern can’t reach.',
+	EHOSTUNREACH: 'No route to that host from where pg·modern runs.'
+};
+
 export function toQueryError(err: unknown): QueryError {
 	if (err && typeof err === 'object' && 'message' in err) {
 		const e = err as pg.DatabaseError;
+		const network = e.code ? NETWORK_HINTS[e.code] : undefined;
 		return {
-			message: e.message,
+			message: e.message || (e.code ? `Connection failed (${e.code})` : 'Connection failed'),
 			code: e.code,
 			position: e.position ? Number(e.position) : undefined,
 			detail: e.detail,
-			hint: e.hint
+			hint: e.hint ?? network
 		};
 	}
 	return { message: String(err) };

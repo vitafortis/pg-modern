@@ -1,4 +1,4 @@
-import type { Candidate } from '#lib/types.ts';
+import type { Candidate, Connection } from '#lib/types.ts';
 import { listConnections } from '../store.ts';
 
 /**
@@ -22,17 +22,26 @@ export function recall(key: string): Candidate | undefined {
 	return pending.get(key)?.candidate;
 }
 
-/** Strips secrets and marks candidates that match an already-saved connection. */
+/** Strips secrets and marks candidates that correspond to an already-saved connection. */
 export function redact(candidates: Candidate[]): Candidate[] {
 	const saved = listConnections();
 	return candidates.map(({ password: _password, ...c }) => {
 		const addresses = [{ host: c.host, port: c.port }, ...(c.alternates ?? [])];
-		const existing = saved.find(
-			(s) =>
-				s.user === c.user &&
-				s.database === c.database &&
-				addresses.some((a) => a.host.toLowerCase() === s.host.toLowerCase() && a.port === s.port)
+		const sameLogin = (s: Connection) => s.user === c.user && s.database === c.database;
+		const atAddress = saved.find(
+			(s) => sameLogin(s) && addresses.some((a) => a.host.toLowerCase() === s.host.toLowerCase() && a.port === s.port)
 		);
-		return { ...c, existingId: existing?.id };
+		// Imported from the same container or file, but the address has since moved.
+		const moved =
+			!atAddress && c.source.ref
+				? saved.find((s) => sameLogin(s) && s.source.kind === c.source.kind && s.source.ref === c.source.ref)
+				: undefined;
+		const match = atAddress ?? moved;
+		// Saved on an address this scan found unreachable, while another one answers.
+		const better = !!atAddress && c.reachable === true && (atAddress.host.toLowerCase() !== c.host.toLowerCase() || atAddress.port !== c.port);
+		return {
+			...c,
+			saved: match && { id: match.id, name: match.name, host: match.host, port: match.port, addressChanged: !atAddress || better }
+		};
 	});
 }

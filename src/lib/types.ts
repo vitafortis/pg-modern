@@ -60,8 +60,12 @@ export interface Candidate {
 	alternates?: { host: string; port: number; label: string }[];
 	/** Free-form hints shown in the UI, e.g. "password is in a *_FILE secret". */
 	notes: string[];
-	/** Id of a saved connection with the same fingerprint, if any. */
-	existingId?: string;
+	/**
+	 * The saved connection this candidate corresponds to: same address, or the same
+	 * container/file with the same user and database. `addressChanged` means the saved
+	 * copy points at an address this scan no longer reports (e.g. the port changed).
+	 */
+	saved?: { id: string; name: string; host: string; port: number; addressChanged: boolean };
 	reachable?: boolean;
 }
 

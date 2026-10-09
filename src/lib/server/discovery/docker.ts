@@ -130,6 +130,24 @@ export async function pickReachable(addresses: Address[]): Promise<{ primary: Ad
 	return { primary, alternates: uniqueAddresses(addresses.filter((a) => a !== primary)), reachable: idx !== -1 };
 }
 
+/**
+ * Probes a candidate's address and its alternates, and makes the first reachable one
+ * primary. Compose files and .env files say where a database *should* be; this picks
+ * the address that actually answers from where pg·modern runs.
+ */
+export async function settleAddress(c: Candidate): Promise<Candidate> {
+	const addresses = uniqueAddresses<Address>([{ host: c.host, port: c.port, label: 'as configured' }, ...(c.alternates ?? [])]);
+	const { primary, alternates, reachable } = await pickReachable(addresses);
+	c.reachable = reachable;
+	if (primary.host !== c.host || primary.port !== c.port) {
+		c.host = primary.host;
+		c.port = primary.port;
+		c.alternates = alternates;
+		c.fingerprint = fingerprint(c);
+	}
+	return c;
+}
+
 export function postgresCredentials(env: Record<string, string>) {
 	const notes: string[] = [];
 	const user = env.POSTGRES_USER || env.POSTGRESQL_USERNAME || env.POSTGRESQL_USER || 'postgres';
@@ -237,7 +255,7 @@ export async function discoverDocker(): Promise<{ groups: DockerCandidateGroup[]
 									cand.reachable = reachable;
 									cand.fingerprint = fingerprint(cand);
 								} else {
-									cand.reachable = await probe(cand.host, cand.port);
+									await settleAddress(cand);
 								}
 								candidates.push(cand);
 							}

@@ -42,3 +42,22 @@ export const editor = $state<{ target: Connection | 'new' | null }>({ target: nu
 export const session = $state<{ viewer: Viewer | null }>({ viewer: null });
 
 export const isAdmin = () => session.viewer?.role === 'admin';
+
+type ConfirmRequest = {
+	title: string;
+	body?: string;
+	/** Monospace detail, e.g. the SQL about to run. */
+	detail?: string;
+	confirmLabel?: string;
+	danger?: boolean;
+	resolve: (ok: boolean) => void;
+};
+
+/** The open confirmation dialog, rendered once by the root layout. */
+export const confirmation = $state<{ request: ConfirmRequest | null }>({ request: null });
+
+/** Asks the user to confirm; resolves false if they cancel or dismiss. */
+export function confirmAction(opts: Omit<ConfirmRequest, 'resolve'>): Promise<boolean> {
+	confirmation.request?.resolve(false);
+	return new Promise((resolve) => (confirmation.request = { ...opts, resolve }));
+}

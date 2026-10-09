@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { removeConnection } from '#lib/client/connections.ts';
 	import { goto } from '$app/navigation';
 	import { CircleCheck, CircleAlert, LoaderCircle, Lock, PencilLine, Trash2, Zap } from '@lucide/svelte';
 	import Dialog from './Dialog.svelte';
@@ -115,12 +116,7 @@
 	}
 
 	async function remove() {
-		if (!editing) return;
-		await api.del(`/api/connections/${editing.id}`);
-		await refreshConnections();
-		toast('success', 'Connection deleted', editing.name);
-		editor.target = null;
-		goto('/');
+		if (editing) await removeConnection(editing);
 	}
 </script>
 
@@ -252,7 +248,7 @@
 			{#if confirmDelete}
 				<span class="mr-auto flex items-center gap-2 text-xs text-muted-foreground">
 					Delete for good?
-					<button class="btn btn-danger btn-sm" onclick={remove}>Delete</button>
+					<button class="btn btn-danger btn-sm" onclick={remove}><Trash2 />Remove</button>
 					<button class="btn btn-ghost btn-sm" onclick={() => (confirmDelete = false)}>Keep</button>
 				</span>
 			{:else}

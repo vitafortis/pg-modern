@@ -34,5 +34,6 @@ export const api = {
 };
 
 export function errorMessage(err: unknown): string {
+	if (err instanceof ApiError && err.detail?.hint) return `${err.message}. ${err.detail.hint}`;
 	return err instanceof Error ? err.message : String(err);
 }

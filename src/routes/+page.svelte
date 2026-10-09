@@ -10,8 +10,10 @@
 		Plus,
 		Radar,
 		RefreshCw,
-		Settings2
+		Settings2,
+		Trash2
 	} from '@lucide/svelte';
+	import { removeConnection } from '#lib/client/connections.ts';
 	import PageHeader from '#lib/components/PageHeader.svelte';
 	import AccessBadge from '#lib/components/AccessBadge.svelte';
 	import SourceBadge from '#lib/components/SourceBadge.svelte';
@@ -20,7 +22,7 @@
 	import { connections, editor, isAdmin } from '#lib/client/state.svelte.ts';
 	import type { QueryError } from '#lib/types.ts';
 
-	type Status = { state: 'checking' } | { state: 'up'; latencyMs: number; version: string } | { state: 'down'; error: string };
+	type Status = { state: 'checking' } | { state: 'up'; latencyMs: number; version: string } | { state: 'down'; error: string; hint?: string };
 	let status = $state<Record<string, Status>>({});
 
 	async function check(id: string) {
@@ -31,7 +33,7 @@
 			);
 			status[id] = r.ok
 				? { state: 'up', latencyMs: r.latencyMs, version: /PostgreSQL ([\d.]+)/.exec(r.version)?.[1] ?? '' }
-				: { state: 'down', error: r.error.message };
+				: { state: 'down', error: r.error.message, hint: r.error.hint };
 		} catch (err) {
 			status[id] = { state: 'down', error: String(err) };
 		}
@@ -142,14 +144,16 @@
 							</div>
 							{#if s?.state === 'down'}
 								<p class="mt-3 line-clamp-2 font-mono text-[11px] text-danger/90">{s.error}</p>
+								{#if s.hint}<p class="mt-1 line-clamp-3 text-[11px] text-muted-foreground">{s.hint}</p>{/if}
 							{/if}
 						</a>
 						<div class="relative flex items-center justify-between border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
 							<span>Last used {ago(c.lastConnectedAt)}</span>
 							{#if isAdmin()}
-								<button class="btn btn-ghost btn-sm -mr-2 opacity-0 group-hover:opacity-100 focus:opacity-100" onclick={() => (editor.target = c)}>
-									<Settings2 />Edit
-								</button>
+								<div class="-mr-2 flex items-center opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
+									<button class="btn btn-ghost btn-sm" onclick={() => (editor.target = c)}><Settings2 />Edit</button>
+									<button class="btn btn-ghost btn-sm hover:text-danger" onclick={() => removeConnection(c)}><Trash2 />Remove</button>
+								</div>
 							{/if}
 						</div>
 					</div>

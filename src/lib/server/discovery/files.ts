@@ -5,7 +5,8 @@ import { config } from '../config.ts';
 import { getSettings } from '../store.ts';
 import { extractCandidates, interpolate, parseDotenv } from './env.ts';
 import { composeCandidates } from './compose.ts';
-import { mapLimit, probe } from './probe.ts';
+import { mapLimit } from './probe.ts';
+import { settleAddress } from './docker.ts';
 import type { Candidate, EnvScanResult } from '#lib/types.ts';
 
 const SKIP_DIRS = new Set([
@@ -94,7 +95,7 @@ export async function scanFiles(extraRoots: string[] = []): Promise<{ result: En
 		if (!candidates.length) return;
 		// An app service and the server it points at often resolve to the same target; keep the first.
 		candidates = candidates.filter((c, i) => candidates.findIndex((x) => x.fingerprint === c.fingerprint) === i);
-		await Promise.all(candidates.map(async (c) => (c.reachable = await probe(c.host, c.port))));
+		await Promise.all(candidates.map(settleAddress));
 		files.push({ path, candidates });
 		all.push(...candidates);
 	});

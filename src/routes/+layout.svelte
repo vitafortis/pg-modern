@@ -17,11 +17,14 @@
 		PanelLeftClose,
 		PanelLeftOpen,
 		Users,
-		Plug
+		Plug,
+		Trash2
 	} from '@lucide/svelte';
+	import { removeConnection } from '#lib/client/connections.ts';
 	import Logo from '#lib/components/Logo.svelte';
 	import Toaster from '#lib/components/Toaster.svelte';
 	import ConnectionDialog from '#lib/components/ConnectionDialog.svelte';
+	import ConfirmHost from '#lib/components/ConfirmHost.svelte';
 	import { api } from '#lib/client/api.ts';
 	import { COLORS } from '#lib/client/format.ts';
 	import { connections, editor, isAdmin, session, setTheme, theme } from '#lib/client/state.svelte.ts';
@@ -137,23 +140,35 @@
 			<div class="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 pb-2">
 				{#each filtered as c (c.id)}
 					{@const active = page.url.pathname.startsWith(`/c/${c.id}`)}
-					<a
-						href="/c/{c.id}"
-						title="{c.name} — {c.user}@{c.host}:{c.port}/{c.database}"
-						class="group flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors {active
+					<div
+						class="group relative flex h-8 items-center rounded-lg text-[13px] transition-colors {active
 							? 'bg-accent text-foreground'
 							: 'text-muted-foreground hover:bg-accent/70 hover:text-foreground'}"
 					>
-						<span class="size-2 shrink-0 rounded-full" style="background:{COLORS[c.color] ?? COLORS.violet}; box-shadow: 0 0 8px {COLORS[c.color] ?? COLORS.violet}"></span>
-						{#if !collapsed}
-							<span class="min-w-0 flex-1 truncate">{c.name}</span>
-							{#if c.readOnly || !isAdmin()}
-								<Lock class="size-3 shrink-0 opacity-40" />
-							{:else}
-								<PencilLine class="size-3 shrink-0 text-warning" />
+						<a href="/c/{c.id}" title="{c.name} — {c.user}@{c.host}:{c.port}/{c.database}" class="flex h-full min-w-0 flex-1 items-center gap-2.5 px-2.5">
+							<span class="size-2 shrink-0 rounded-full" style="background:{COLORS[c.color] ?? COLORS.violet}; box-shadow: 0 0 8px {COLORS[c.color] ?? COLORS.violet}"></span>
+							{#if !collapsed}
+								<span class="min-w-0 flex-1 truncate">{c.name}</span>
+								<span class={isAdmin() ? 'group-focus-within:hidden group-hover:hidden' : ''}>
+									{#if c.readOnly || !isAdmin()}
+										<Lock class="size-3 shrink-0 opacity-40" />
+									{:else}
+										<PencilLine class="size-3 shrink-0 text-warning" />
+									{/if}
+								</span>
 							{/if}
+						</a>
+						{#if !collapsed && isAdmin()}
+							<button
+								class="absolute right-1 hidden rounded-md p-1 text-muted-foreground group-focus-within:block group-hover:block hover:bg-danger/10 hover:text-danger"
+								title="Remove {c.name}"
+								aria-label="Remove {c.name}"
+								onclick={() => removeConnection(c)}
+							>
+								<Trash2 class="size-3.5" />
+							</button>
 						{/if}
-					</a>
+					</div>
 				{:else}
 					{#if !collapsed && isAdmin()}
 						<button
@@ -204,3 +219,4 @@
 {/if}
 
 <Toaster />
+<ConfirmHost />
