@@ -5,6 +5,8 @@ import { extractCandidates, fingerprint } from './env.ts';
 import { detectServer, postgresLogins, serverLogins, type ServerKind } from './detect.ts';
 import { mapLimit, probe } from './probe.ts';
 import { findSelf, networkPath, type ContainerNetworks } from './network.ts';
+import { containerSqlite } from '../sqlite/containers.ts';
+import type { ContainerMount } from '../sqlite/archive.ts';
 import type { Candidate, DockerCandidateGroup, NetworkPath, SelfNetworks } from '#lib/types.ts';
 
 
@@ -51,6 +53,7 @@ interface ContainerInspect {
 	Id: string;
 	Name: string;
 	Config: { Env: string[] | null; Image: string; Labels: Record<string, string> | null; ExposedPorts?: Record<string, object> };
+	Mounts?: ContainerMount[] | null;
 	NetworkSettings: {
 		Ports: Record<string, { HostIp: string; HostPort: string }[] | null> | null;
 		Networks: Record<string, { IPAddress: string; Aliases: string[] | null }> | null;
@@ -321,6 +324,23 @@ export async function discoverDocker(): Promise<{ groups: DockerCandidateGroup[]
 						}
 					}
 				}
+				// SQLite files in each container's mounts: visible here under a scan folder, or
+				// (opt-in) copied out through the Docker archive API.
+				await mapLimit(inspected, 4, async (c) => {
+					const i = inspected.indexOf(c);
+					const name = c.Name.replace(/^\//, '');
+					if (self.container && name === self.container) return;
+					const labels = c.Config.Labels ?? {};
+					const project = labels['com.docker.compose.project'];
+					const label = project ? `${project}/${labels['com.docker.compose.service']}` : name;
+					const found = await containerSqlite(endpoint, { id: c.Id, name, label, state: summaries[i].State, mounts: c.Mounts ?? [] }).catch(() => [] as Candidate[]);
+					if (!found.length) return;
+					all.push(...found);
+					const entry = containers.find((x) => x.id === c.Id.slice(0, 12));
+					if (entry) entry.candidates.push(...found);
+					else containers.push({ id: c.Id.slice(0, 12), name, image: c.Config.Image, state: summaries[i].State, status: summaries[i].Status, candidates: found });
+				});
+
 				// Everything else, so the UI can show what was looked at and why it was skipped.
 				const listed = new Set(containers.map((c) => c.id));
 				const skipped = inspected

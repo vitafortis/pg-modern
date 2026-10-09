@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { config } from './config.ts';
 import { decrypt, encrypt } from './crypto.ts';
 import type { AuditEvent, Connection, ConnectionInput, Grant, HistoryEntry, Role, Settings, User } from '#lib/types.ts';
-import type { SavedQuery } from '#lib/types.ts';
+import type { SavedQuery, SqliteSnapshot } from '#lib/types.ts';
 
 let handle: DatabaseSync | undefined;
 
@@ -73,6 +73,7 @@ function db(): DatabaseSync {
 	`);
 	migrate(handle);
 	migrateSavedQueries(handle);
+	migrateSqlite(handle);
 	return handle;
 }
 
@@ -173,7 +174,7 @@ type Row = Record<string, unknown>;
 function toConnection(r: Row): Connection {
 	return {
 		id: r.id as string,
-		engine: r.engine === 'mysql' ? 'mysql' : 'postgres',
+		engine: r.engine === 'mysql' || r.engine === 'sqlite' ? r.engine : 'postgres',
 		flavor: (r.flavor as Connection['flavor']) ?? null,
 		name: r.name as string,
 		host: r.host as string,
@@ -187,7 +188,8 @@ function toConnection(r: Row): Connection {
 		source: { kind: r.source_kind as Connection['source']['kind'], ref: (r.source_ref as string) ?? undefined },
 		createdAt: r.created_at as string,
 		updatedAt: r.updated_at as string,
-		lastConnectedAt: (r.last_connected_at as string) ?? null
+		lastConnectedAt: (r.last_connected_at as string) ?? null,
+		...(r.engine === 'sqlite' ? sqliteSnapshotField(r.id as string) : {})
 	};
 }
 
@@ -701,4 +703,57 @@ export function updateSavedQuery(id: string, input: SavedQueryInput): SavedQuery
 
 export function deleteSavedQuery(id: string): boolean {
 	return Number(db().prepare('DELETE FROM saved_queries WHERE id = ?').run(id).changes) > 0;
+}
+
+// --- SQLite snapshots --------------------------------------------------------
+
+function migrateSqlite(h: DatabaseSync) {
+	h.exec(`
+		-- SQLite databases copied out of containers through the Docker archive API.
+		CREATE TABLE IF NOT EXISTS container_sqlite_snapshots (
+			connection_id TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,
+			endpoint TEXT NOT NULL,
+			container TEXT NOT NULL,
+			container_id TEXT NOT NULL,
+			container_path TEXT NOT NULL,
+			taken_at TEXT,
+			bytes INTEGER,
+			wal INTEGER NOT NULL DEFAULT 0,
+			error TEXT
+		);
+	`);
+}
+
+function sqliteSnapshotField(id: string): { snapshot?: SqliteSnapshot } {
+	const s = getSqliteSnapshot(id);
+	return s ? { snapshot: s } : {};
+}
+
+export function getSqliteSnapshot(id: string): SqliteSnapshot | undefined {
+	const r = db().prepare('SELECT * FROM container_sqlite_snapshots WHERE connection_id = ?').get(id) as Row | undefined;
+	if (!r) return undefined;
+	return {
+		endpoint: r.endpoint as string,
+		container: r.container as string,
+		containerId: r.container_id as string,
+		containerPath: r.container_path as string,
+		takenAt: (r.taken_at as string) ?? null,
+		bytes: (r.bytes as number) ?? null,
+		wal: r.wal === 1,
+		error: (r.error as string) ?? null
+	};
+}
+
+export function setSqliteSnapshot(id: string, s: SqliteSnapshot) {
+	db().prepare(
+		`INSERT INTO container_sqlite_snapshots (connection_id, endpoint, container, container_id, container_path, taken_at, bytes, wal, error)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(connection_id) DO UPDATE SET endpoint = excluded.endpoint, container = excluded.container, container_id = excluded.container_id,
+			container_path = excluded.container_path, taken_at = excluded.taken_at, bytes = excluded.bytes, wal = excluded.wal, error = excluded.error`
+	).run(id, s.endpoint, s.container, s.containerId, s.containerPath, s.takenAt, s.bytes, s.wal ? 1 : 0, s.error);
+}
+
+/** Points a snapshot connection at its local copy; doesn't count as an edit. */
+export function setConnectionDatabase(id: string, database: string) {
+	db().prepare('UPDATE connections SET database = ? WHERE id = ?').run(database, id);
 }

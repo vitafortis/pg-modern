@@ -8,6 +8,8 @@ import { composeCandidates } from './compose.ts';
 import { isTerraformFile, terraformCandidates } from './terraform.ts';
 import { mapLimit } from './probe.ts';
 import { dockerSelf, settleAddress } from './docker.ts';
+import { isSqliteCandidateName } from '../sqlite/files.ts';
+import { inspectDatabase, sqliteCandidate } from '../sqlite/discover.ts';
 import type { Candidate, EnvScanResult, SelfNetworks } from '#lib/types.ts';
 
 const SKIP_DIRS = new Set([
@@ -29,7 +31,10 @@ export function scanRoots(extra: string[] = []): string[] {
 	return [...new Set([...config.scanPaths, ...getSettings().scanPaths, ...extra].map((p) => resolve(expandHome(p))))];
 }
 
-async function walk(root: string, depth: number, out: string[], errors: string[]) {
+/** SQLite files seen during a walk (by name; the header is checked afterwards). */
+const MAX_SQLITE = 500;
+
+async function walk(root: string, depth: number, out: string[], errors: string[], sqliteOut: string[] = []) {
 	if (out.length >= MAX_FILES) return;
 	let entries;
 	try {
@@ -42,8 +47,10 @@ async function walk(root: string, depth: number, out: string[], errors: string[]
 		const full = join(root, e.name);
 		if (e.isFile() && (ENV_FILE.test(e.name) || COMPOSE_FILE.test(e.name) || isTerraformFile(e.name))) {
 			if (!/\.(example|sample|template|dist)$/i.test(e.name)) out.push(full);
+		} else if (e.isFile() && isSqliteCandidateName(e.name)) {
+			if (sqliteOut.length < MAX_SQLITE) sqliteOut.push(full);
 		} else if (e.isDirectory() && depth > 0 && !SKIP_DIRS.has(e.name)) {
-			await walk(full, depth - 1, out, errors);
+			await walk(full, depth - 1, out, errors, sqliteOut);
 		}
 	}
 }
@@ -74,7 +81,8 @@ export async function scanFiles(extraRoots: string[] = []): Promise<{ result: En
 	const roots = scanRoots(extraRoots);
 	const errors: string[] = [];
 	const paths: string[] = [];
-	for (const root of roots) await walk(root, config.scanDepth, paths, errors);
+	const sqlitePaths: string[] = [];
+	for (const root of roots) await walk(root, config.scanDepth, paths, errors, sqlitePaths);
 	const self = await dockerSelf();
 
 	const composeDirs = new Set(paths.filter((p) => COMPOSE_FILE.test(basename(p))).map(dirname));
@@ -83,7 +91,7 @@ export async function scanFiles(extraRoots: string[] = []): Promise<{ result: En
 	const report = async (path: string, candidates: Candidate[]) => {
 		// An app service and the server it points at often resolve to the same target; keep the first.
 		candidates = candidates.filter((c, i) => candidates.findIndex((x) => x.fingerprint === c.fingerprint) === i);
-		await Promise.all(candidates.map(settleAddress));
+		await Promise.all(candidates.filter((c) => c.engine !== 'sqlite').map(settleAddress));
 		files.push({ path, candidates });
 		all.push(...candidates);
 	};
@@ -130,6 +138,23 @@ export async function scanFiles(extraRoots: string[] = []): Promise<{ result: En
 			});
 		}
 		if (candidates.length) await report(path, candidates);
+	});
+
+	// SQLite databases: confirmed by their 16-byte header, labelled with the app the path suggests.
+	await mapLimit(sqlitePaths, 16, async (path) => {
+		const found = await inspectDatabase(path);
+		if (!found) return;
+		const root = roots.find((r) => path.startsWith(r)) ?? dirname(path);
+		const context = relative(root, dirname(path)) || basename(root);
+		await report(path, [
+			sqliteCandidate({
+				database: path,
+				context,
+				source: { kind: 'env', ref: path },
+				info: { via: 'file', sizeBytes: found.size, wal: found.wal },
+				notes: found.wal ? ['WAL database: reading it needs its -shm/-wal files readable, or write access to the folder.'] : []
+			})
+		]);
 	});
 
 	files.sort((a, b) => a.path.localeCompare(b.path));

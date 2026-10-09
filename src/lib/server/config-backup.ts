@@ -103,7 +103,7 @@ export function snapshot(include: BackupInclude): BackupPayload {
 	if (include.connections) {
 		payload.connections = (h.prepare('SELECT * FROM connections ORDER BY name COLLATE NOCASE').all() as Row[]).map((r) => ({
 			id: r.id as string,
-			engine: r.engine === 'mysql' ? 'mysql' : 'postgres',
+			engine: isEngine(r.engine) ? r.engine : 'postgres',
 			flavor: (r.flavor as Flavor | null) ?? null,
 			name: r.name as string,
 			host: r.host as string,
@@ -195,7 +195,7 @@ export function validatePayload(raw: unknown): BackupPayload {
 			if (!SSL_MODES.includes(c.sslMode)) throw new BackupError(`Damaged backup: sslMode of ${c.name}`);
 			if (c.engine === undefined || c.engine === null) c.engine = 'postgres';
 			else if (!isEngine(c.engine)) throw new BackupError(`Damaged backup: engine of ${c.name}`);
-			if (!['postgres', 'mysql', 'mariadb'].includes(String(c.flavor))) c.flavor = null;
+			if (!['postgres', 'mysql', 'mariadb', 'sqlite'].includes(String(c.flavor))) c.flavor = null;
 			if (c.password !== null && typeof c.password !== 'string') throw new BackupError(`Damaged backup: password of ${c.name}`);
 		}
 	}
@@ -245,7 +245,7 @@ export function previewRestore(p: BackupPayload, actorId: string | null, meta: {
 		connections: (p.connections ?? []).map((c) => ({
 			id: c.id,
 			name: c.name,
-			target: `${c.engine === 'mysql' ? 'mysql://' : ''}${c.user}@${c.host}:${c.port}/${c.database}`,
+			target: c.engine === 'sqlite' ? `sqlite:${c.database}` : `${c.engine === 'mysql' ? 'mysql://' : ''}${c.user}@${c.host}:${c.port}/${c.database}`,
 			hasPassword: !!c.password,
 			status: connExists.get(c.id) ? 'update' : 'new'
 		})),

@@ -1,4 +1,6 @@
 import { json } from '@sveltejs/kit';
+import { resolve } from 'node:path';
+import { config } from './config.ts';
 import { NotFound, toQueryError } from './engine.ts';
 import { DEFAULT_PORT, isEngine } from '#lib/engine.ts';
 import type { ConnectionInput, SslMode } from '#lib/types.ts';
@@ -31,8 +33,30 @@ export function parseConnectionInput(body: unknown, { requirePassword = false } 
 		if (typeof v !== 'string' || !v.trim()) throw new BadRequest(`"${k}" is required`);
 		return v.trim();
 	};
-	if (b.engine !== undefined && !isEngine(b.engine)) throw new BadRequest('"engine" must be postgres or mysql');
+	if (b.engine !== undefined && !isEngine(b.engine)) throw new BadRequest('"engine" must be postgres, mysql or sqlite');
 	const engine = isEngine(b.engine) ? b.engine : 'postgres';
+	if (engine === 'sqlite') {
+		// A SQLite connection is a file: no host, port, user, password or TLS.
+		const path = str(typeof b.path === 'string' ? 'path' : 'database');
+		if (!path.startsWith('/')) throw new BadRequest('The SQLite path must be absolute (as pg·modern sees it, e.g. /appdata/sonarr/sonarr.db)');
+		if (/\0/.test(path)) throw new BadRequest('Invalid path');
+		const full = resolve(path);
+		if (full === config.dataDir || full.startsWith(`${config.dataDir}/`)) {
+			throw new BadRequest('Files in pg·modern’s own data folder can’t be opened as connections.');
+		}
+		return {
+			engine,
+			name: typeof b.name === 'string' && b.name.trim() ? b.name.trim() : path.split('/').pop() || path,
+			host: '',
+			port: 0,
+			database: full,
+			user: '',
+			password: undefined,
+			sslMode: 'disable',
+			readOnly: b.readOnly !== false,
+			color: typeof b.color === 'string' ? b.color : undefined
+		};
+	}
 	const port = Number(b.port ?? DEFAULT_PORT[engine]);
 	if (!Number.isInteger(port) || port < 1 || port > 65535) throw new BadRequest('"port" must be 1–65535');
 	const sslMode = (b.sslMode ?? 'prefer') as SslMode;
