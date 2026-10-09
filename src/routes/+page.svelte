@@ -136,7 +136,7 @@
 								</div>
 							</div>
 							<div class="mt-4 flex flex-wrap items-center gap-1.5">
-								<AccessBadge readOnly={c.readOnly || !isAdmin()} />
+								<AccessBadge readOnly={c.access?.readOnly ?? true} unlocked={!!c.access?.unlockedUntil} />
 								<SourceBadge source={c.source} />
 								{#if s?.state === 'up'}
 									<span class="badge font-mono">pg {s.version}</span>

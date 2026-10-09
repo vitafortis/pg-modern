@@ -2,7 +2,9 @@ import { json, redirect } from '@sveltejs/kit';
 import type { Handle } from '@sveltejs/kit/hooks';
 import { authenticate } from '#lib/server/auth.ts';
 import { publicUrl } from '#lib/server/origin.ts';
-import { ADMIN_PAGES, adminOnlyApi } from '#lib/server/access.ts';
+import { ADMIN_PAGES, adminOnlyApi, connectionIdFromPath } from '#lib/server/access.ts';
+import { canSee } from '#lib/server/permissions.ts';
+import { getConnection } from '#lib/server/store.ts';
 
 const PUBLIC = ['/login', '/setup', '/auth/oidc/', '/api/auth/', '/api/health'];
 
@@ -36,6 +38,9 @@ export const handle: Handle = async ({ event, resolve }) => {
 	const { state, user } = authenticate(event.cookies);
 	event.locals.auth = state;
 	event.locals.user = user;
+	try {
+		event.locals.ip = event.getClientAddress();
+	} catch {}
 
 	if (!PUBLIC.some((p) => pathname.startsWith(p))) {
 		if (state === 'setup') {
@@ -54,6 +59,13 @@ export const handle: Handle = async ({ event, resolve }) => {
 		if (user?.role !== 'admin') {
 			if (isApi && adminOnlyApi(method, pathname)) return json({ message: 'Admins only' }, { status: 403 });
 			if (!isApi && ADMIN_PAGES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) redirect(303, '/');
+		}
+		// Connections a user hasn't been given access to don't exist, as far as they can tell.
+		const connId = connectionIdFromPath(pathname);
+		const conn = connId ? getConnection(connId) : undefined;
+		if (conn && !canSee(user, conn)) {
+			if (isApi) return json({ message: 'Connection not found' }, { status: 404 });
+			redirect(303, '/');
 		}
 	}
 

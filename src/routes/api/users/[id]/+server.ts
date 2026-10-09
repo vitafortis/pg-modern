@@ -3,6 +3,7 @@ import { hashPassword } from '#lib/server/crypto.ts';
 import { BadRequest, handler } from '#lib/server/http.ts';
 import { NotFound } from '#lib/server/pg.ts';
 import { countAdmins, deleteUser, getUser, updateUser } from '#lib/server/store.ts';
+import { audit } from '#lib/server/permissions.ts';
 import type { RequestHandler } from './$types';
 
 function guardLastAdmin(id: string, losingAdmin: boolean) {
@@ -31,13 +32,22 @@ export const PATCH: RequestHandler = handler(async ({ params, request, locals })
 	if (params.id === locals.user?.id && (patch.disabled || patch.role === 'viewer')) {
 		throw new BadRequest("You can't demote or disable yourself");
 	}
-	guardLastAdmin(params.id, patch.role === 'viewer' || patch.disabled === true);
-	return json(updateUser(params.id, patch));
+	const before = guardLastAdmin(params.id, patch.role === 'viewer' || patch.disabled === true);
+	const updated = updateUser(params.id, patch);
+	const changes = [
+		patch.role && patch.role !== before.role && `role ${patch.role}`,
+		patch.disabled !== undefined && patch.disabled !== before.disabled && (patch.disabled ? 'disabled' : 'enabled'),
+		patch.passwordHash !== undefined && (patch.passwordHash ? 'password set' : 'password removed'),
+		patch.name !== undefined && patch.name !== before.name && 'name changed'
+	].filter(Boolean);
+	if (changes.length) audit(locals, 'user.update', { detail: `${before.email}: ${changes.join(', ')}` });
+	return json(updated);
 });
 
 export const DELETE: RequestHandler = handler(({ params, locals }) => {
 	if (params.id === locals.user?.id) throw new BadRequest("You can't delete yourself");
-	guardLastAdmin(params.id, true);
+	const user = guardLastAdmin(params.id, true);
 	deleteUser(params.id);
+	audit(locals, 'user.delete', { detail: user.email });
 	return json({ ok: true });
 });

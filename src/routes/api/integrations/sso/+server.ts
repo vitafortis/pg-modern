@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import { config } from '#lib/server/config.ts';
 import { BadRequest, handler } from '#lib/server/http.ts';
 import { deleteSso, hasStoredSecret, localLoginDisabled, saveSso, setLocalLoginDisabled, ssoConfig } from '#lib/server/sso.ts';
+import { audit } from '#lib/server/permissions.ts';
 import type { RequestHandler } from './$types';
 
 function view(origin: string) {
@@ -39,6 +40,7 @@ export const PUT: RequestHandler = handler(async ({ request, locals }) => {
 	if (ssoConfig()?.source === 'env') {
 		// Env-configured SSO: only the password sign-in toggle can be changed here.
 		if (typeof body.localLoginDisabled === 'boolean') setLocalLoginDisabled(body.localLoginDisabled);
+		audit(locals, 'settings.sso', { detail: `password sign-in ${body.localLoginDisabled ? 'disabled' : 'enabled'}` });
 		return json(view(locals.origin));
 	}
 	const issuer = typeof body.issuer === 'string' ? body.issuer.trim() : '';
@@ -59,11 +61,13 @@ export const PUT: RequestHandler = handler(async ({ request, locals }) => {
 		defaultRole: body.defaultRole === 'admin' ? 'admin' : 'viewer'
 	});
 	if (typeof body.localLoginDisabled === 'boolean') setLocalLoginDisabled(body.localLoginDisabled);
+	audit(locals, 'settings.sso', { detail: `saved (${issuer})` });
 	return json(view(locals.origin));
 });
 
 export const DELETE: RequestHandler = handler(({ locals }) => {
 	if (ssoConfig()?.source === 'env') throw new BadRequest('SSO is configured with PGM_OIDC_* environment variables; remove them there.');
 	deleteSso();
+	audit(locals, 'settings.sso', { detail: 'removed' });
 	return json(view(locals.origin));
 });

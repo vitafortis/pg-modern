@@ -1,12 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Ban, KeyRound, LoaderCircle, Plus, ShieldCheck, Trash2, UserCheck, UserPlus } from '@lucide/svelte';
+	import { Ban, Database, KeyRound, LoaderCircle, Plus, ShieldCheck, Trash2, UserCheck, UserPlus } from '@lucide/svelte';
 	import PageHeader from '#lib/components/PageHeader.svelte';
 	import Dialog from '#lib/components/Dialog.svelte';
 	import { api, errorMessage } from '#lib/client/api.ts';
 	import { ago } from '#lib/client/format.ts';
-	import { session, toast } from '#lib/client/state.svelte.ts';
-	import type { Role, User } from '#lib/types.ts';
+	import { connections, session, toast } from '#lib/client/state.svelte.ts';
+	import { COLORS } from '#lib/client/format.ts';
+	import type { Grant, Role, User } from '#lib/types.ts';
 
 	type Oidc = { name: string; autoCreate: string[]; adminEmails: string[]; defaultRole: Role } | null;
 
@@ -66,6 +67,38 @@
 	}
 
 	const isSelf = (u: User) => u.email === session.viewer?.email;
+
+	// Connection access editor (viewers only; admins see and can unlock everything).
+	let accessFor = $state<User | null>(null);
+	let accessMode = $state<User['connectionAccess']>('all');
+	let grants = $state<Record<string, { read: boolean; write: boolean }>>({});
+	let savingAccess = $state(false);
+
+	async function editAccess(u: User) {
+		const res = await api.get<{ connectionAccess: User['connectionAccess']; grants: Grant[] }>(`/api/users/${u.id}/access`);
+		accessMode = res.connectionAccess;
+		grants = Object.fromEntries(connections.list.map((c) => [c.id, { read: false, write: false }]));
+		for (const g of res.grants) grants[g.connectionId] = { read: true, write: g.canWrite };
+		accessFor = u;
+	}
+
+	async function saveAccess() {
+		if (!accessFor) return;
+		savingAccess = true;
+		try {
+			const list = Object.entries(grants)
+				.filter(([, g]) => g.write || (accessMode === 'selected' && g.read))
+				.map(([connectionId, g]) => ({ connectionId, canWrite: g.write }));
+			await api.put(`/api/users/${accessFor.id}/access`, { connectionAccess: accessMode, grants: list });
+			toast('success', 'Access updated', accessFor.email);
+			accessFor = null;
+			await load();
+		} catch (err) {
+			toast('error', 'Could not update access', errorMessage(err));
+		} finally {
+			savingAccess = false;
+		}
+	}
 </script>
 
 <svelte:head><title>Users · pg·modern</title></svelte:head>
@@ -85,7 +118,7 @@
 			</div>
 			<div class="card p-4 text-[13px]">
 				<p class="flex items-center gap-2 font-medium"><UserCheck class="size-4 text-primary" />Viewer</p>
-				<p class="mt-1 text-xs text-muted-foreground">Browse and query every connection — always in a read-only transaction. Can't see discovery, settings or credentials.</p>
+				<p class="mt-1 text-xs text-muted-foreground">Browse and query every connection, or only the ones you pick, in a read-only transaction. You can let them unlock writes on specific connections. Can't see discovery, settings or credentials.</p>
 			</div>
 		</div>
 
@@ -110,6 +143,7 @@
 							<th class="px-4 py-2 font-medium">User</th>
 							<th class="px-4 py-2 font-medium">Sign-in</th>
 							<th class="px-4 py-2 font-medium">Role</th>
+							<th class="px-4 py-2 font-medium">Connections</th>
 							<th class="px-4 py-2 font-medium">Last seen</th>
 							<th class="px-4 py-2"></th>
 						</tr>
@@ -144,6 +178,15 @@
 										<option value="admin">Admin</option>
 										<option value="viewer">Viewer</option>
 									</select>
+								</td>
+								<td class="px-4 py-2.5">
+									{#if u.role === 'admin'}
+										<span class="text-xs text-muted-foreground">All</span>
+									{:else}
+										<button class="btn btn-ghost btn-sm -ml-2.5" onclick={() => editAccess(u)}>
+											<Database />{u.connectionAccess === 'all' ? 'All, read-only' : 'Selected'}
+										</button>
+									{/if}
 								</td>
 								<td class="px-4 py-2.5 text-xs text-muted-foreground">{ago(u.lastLoginAt)}</td>
 								<td class="px-4 py-2.5">
@@ -205,5 +248,48 @@
 	{#snippet footer()}
 		<button class="btn btn-secondary" onclick={() => (confirmDelete = null)}>Cancel</button>
 		<button class="btn btn-danger" onclick={() => confirmDelete && remove(confirmDelete)}>Delete</button>
+	{/snippet}
+</Dialog>
+
+<Dialog
+	bind:open={() => accessFor !== null, (v) => !v && (accessFor = null)}
+	title="Connection access"
+	description={accessFor ? `What ${accessFor.name ?? accessFor.email} can open and change.` : ''}
+	width="max-w-xl"
+>
+	<div class="space-y-4">
+		<div class="inline-flex rounded-lg border border-border bg-surface p-0.5">
+			<button class="h-7 rounded-md px-3 text-xs {accessMode === 'all' ? 'bg-card text-foreground shadow-surface' : 'text-muted-foreground'}" onclick={() => (accessMode = 'all')}>All connections</button>
+			<button class="h-7 rounded-md px-3 text-xs {accessMode === 'selected' ? 'bg-card text-foreground shadow-surface' : 'text-muted-foreground'}" onclick={() => (accessMode = 'selected')}>Only selected</button>
+		</div>
+		<p class="text-xs text-muted-foreground">
+			{accessMode === 'all'
+				? 'They see every connection, read-only. Tick "Can unlock writes" to let them switch on write access temporarily (it’s logged).'
+				: 'They only see the connections ticked below. New connections stay hidden until you add them.'}
+		</p>
+		<div class="divide-y divide-border rounded-xl border border-border">
+			{#each connections.list as c (c.id)}
+				{@const g = grants[c.id]}
+				{#if g}
+					<div class="flex items-center gap-3 px-3 py-2 text-[13px]">
+						{#if accessMode === 'selected'}
+							<input type="checkbox" class="size-4 accent-[var(--primary)]" bind:checked={g.read} onchange={() => !g.read && (g.write = false)} aria-label="Can open {c.name}" />
+						{/if}
+						<span class="size-2 shrink-0 rounded-full" style="background:{COLORS[c.color] ?? COLORS.violet}"></span>
+						<span class="min-w-0 flex-1 truncate {accessMode === 'selected' && !g.read ? 'text-muted-foreground' : ''}">{c.name}</span>
+						<label class="flex items-center gap-1.5 text-xs text-muted-foreground {accessMode === 'selected' && !g.read ? 'opacity-40' : ''}">
+							<input type="checkbox" class="size-3.5 accent-[var(--warning)]" disabled={accessMode === 'selected' && !g.read} bind:checked={g.write} />
+							Can unlock writes
+						</label>
+					</div>
+				{/if}
+			{:else}
+				<p class="px-3 py-4 text-center text-xs text-muted-foreground">No connections saved yet.</p>
+			{/each}
+		</div>
+	</div>
+	{#snippet footer()}
+		<button class="btn btn-secondary" onclick={() => (accessFor = null)}>Cancel</button>
+		<button class="btn btn-primary" disabled={savingAccess} onclick={saveAccess}>{#if savingAccess}<LoaderCircle class="animate-spin" />{/if}Save access</button>
 	{/snippet}
 </Dialog>

@@ -104,26 +104,39 @@ function targetFor(conn: Connection): Target {
 	return { ...conn, password: getPassword(conn.id) };
 }
 
-async function entryFor(id: string): Promise<PoolEntry & { conn: Connection }> {
+/**
+ * Pools are per connection and mode. A read-only connection's pool also sets
+ * `default_transaction_read_only`; a temporary write unlock uses a separate pool
+ * without it, so unlocked sessions never leak into read-only use.
+ */
+async function entryFor(id: string, writable = false): Promise<PoolEntry & { conn: Connection; key: string }> {
 	const conn = getConnection(id);
 	if (!conn) throw new NotFound('Connection not found');
-	const existing = pools.get(id);
-	if (existing && existing.version === conn.updatedAt) return { ...existing, conn };
+	const sessionReadOnly = conn.readOnly && !writable;
+	const key = `${id}:${sessionReadOnly ? 'ro' : 'rw'}`;
+	const existing = pools.get(key);
+	if (existing && existing.version === conn.updatedAt) return { ...existing, conn, key };
 	if (existing) {
-		pools.delete(id);
+		pools.delete(key);
 		existing.pool.end().catch(() => {});
 	}
-	const entry: PoolEntry = { pool: await openPool(targetFor(conn)), version: conn.updatedAt, typeNames: new Map() };
-	pools.set(id, entry);
+	const entry: PoolEntry = {
+		pool: await openPool({ ...targetFor(conn), readOnly: sessionReadOnly }),
+		version: conn.updatedAt,
+		typeNames: new Map()
+	};
+	pools.set(key, entry);
 	touchConnection(id);
-	return { ...entry, conn };
+	return { ...entry, conn, key };
 }
 
 export function closePool(id: string) {
-	const entry = pools.get(id);
-	if (entry) {
-		pools.delete(id);
-		entry.pool.end().catch(() => {});
+	for (const key of [`${id}:ro`, `${id}:rw`]) {
+		const entry = pools.get(key);
+		if (entry) {
+			pools.delete(key);
+			entry.pool.end().catch(() => {});
+		}
 	}
 }
 
@@ -199,8 +212,9 @@ export async function withClient<T>(
 	opts: { readOnly: boolean; timeoutMs?: number },
 	fn: (client: pg.PoolClient, entry: PoolEntry) => Promise<T>
 ): Promise<T> {
-	const entry = await entryFor(id);
-	const readOnly = opts.readOnly || entry.conn.readOnly;
+	// Callers decide the mode (see permissions.ts); read-only is the default for everything else.
+	const entry = await entryFor(id, !opts.readOnly);
+	const readOnly = opts.readOnly;
 	const client = await entry.pool.connect();
 	let broken = false;
 	try {
@@ -303,13 +317,13 @@ const running = new Map<string, number>();
 export async function runScript(
 	id: string,
 	script: string,
-	opts: { runId?: string; maxRows?: number; /** Viewers: read-only even on writable connections. */ forceReadOnly?: boolean } = {}
+	opts: { runId?: string; maxRows?: number; /** Effective mode for this user (permissions.ts `readOnlyFor`). */ readOnly: boolean }
 ): Promise<ScriptOutcome> {
 	const statements = splitStatements(script);
 	const maxRows = Math.min(opts.maxRows ?? config.maxRows, config.maxRows);
 	const conn = getConnection(id);
 	if (!conn) throw new NotFound('Connection not found');
-	const readOnly = conn.readOnly || !!opts.forceReadOnly;
+	const readOnly = opts.readOnly;
 
 	if (readOnly) {
 		const blocked = statements.findIndex(escapesReadOnly);

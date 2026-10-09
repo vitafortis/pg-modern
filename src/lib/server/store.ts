@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { config } from './config.ts';
 import { decrypt, encrypt } from './crypto.ts';
-import type { Connection, ConnectionInput, HistoryEntry, Role, Settings, User } from '#lib/types.ts';
+import type { AuditEvent, Connection, ConnectionInput, Grant, HistoryEntry, Role, Settings, User } from '#lib/types.ts';
 
 let handle: DatabaseSync | undefined;
 
@@ -98,6 +98,53 @@ function migrate(h: DatabaseSync) {
 		h.exec(`UPDATE users SET needs_profile = 1 WHERE email NOT LIKE '%@%' AND oidc_sub IS NULL`);
 		h.prepare(`INSERT INTO kv (key, value) VALUES ('migration:needs-profile', 'true')`).run();
 	}
+
+	if (!userCols.some((c) => c.name === 'connection_access')) {
+		h.exec(`ALTER TABLE users ADD COLUMN connection_access TEXT NOT NULL DEFAULT 'all'`);
+	}
+	const historyCols = h.prepare(`SELECT name FROM pragma_table_info('history')`).all() as { name: string }[];
+	if (!historyCols.some((c) => c.name === 'user_id')) {
+		h.exec(`
+			ALTER TABLE history ADD COLUMN user_id TEXT;
+			ALTER TABLE history ADD COLUMN user_email TEXT;
+			ALTER TABLE history ADD COLUMN read_only INTEGER NOT NULL DEFAULT 1;
+		`);
+	}
+	h.exec(`
+		CREATE INDEX IF NOT EXISTS history_time ON history(id DESC);
+
+		-- Per-connection access for users whose connection_access is 'selected',
+		-- and write permission for any non-admin.
+		CREATE TABLE IF NOT EXISTS grants (
+			user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+			can_write INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (user_id, connection_id)
+		);
+
+		-- Temporary write access to a read-only connection.
+		CREATE TABLE IF NOT EXISTS write_unlocks (
+			user_id TEXT NOT NULL,
+			connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+			expires_at INTEGER NOT NULL,
+			reason TEXT,
+			PRIMARY KEY (user_id, connection_id)
+		);
+
+		-- Who changed what. Connection/user names are copied so entries outlive them.
+		CREATE TABLE IF NOT EXISTS audit (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			at TEXT NOT NULL,
+			user_id TEXT,
+			user_email TEXT,
+			action TEXT NOT NULL,
+			connection_id TEXT,
+			connection_name TEXT,
+			detail TEXT,
+			ip TEXT
+		);
+		CREATE INDEX IF NOT EXISTS audit_time ON audit(id DESC);
+	`);
 
 	// v1 had a single admin password; it becomes the local user "admin", who is
 	// asked for a real email and name on their next sign-in.
@@ -258,6 +305,7 @@ function toUser(r: Row): User {
 		sso: r.oidc_sub != null,
 		disabled: r.disabled === 1,
 		needsProfile: r.needs_profile === 1,
+		connectionAccess: (r.connection_access as User['connectionAccess']) ?? 'all',
 		createdAt: r.created_at as string,
 		lastLoginAt: (r.last_login_at as string) ?? null
 	};
@@ -305,7 +353,16 @@ export function createUser(input: { email: string; name?: string | null; role: R
 
 export function updateUser(
 	id: string,
-	patch: { role?: Role; disabled?: boolean; name?: string | null; email?: string; passwordHash?: string | null; oidcSub?: string; needsProfile?: boolean }
+	patch: {
+		role?: Role;
+		disabled?: boolean;
+		name?: string | null;
+		email?: string;
+		passwordHash?: string | null;
+		oidcSub?: string;
+		needsProfile?: boolean;
+		connectionAccess?: User['connectionAccess'];
+	}
 ) {
 	const sets: string[] = [];
 	const values: (string | number | null)[] = [];
@@ -316,6 +373,7 @@ export function updateUser(
 	if (patch.oidcSub !== undefined) sets.push('oidc_sub = ?'), values.push(patch.oidcSub);
 	if (patch.email !== undefined) sets.push('email = ?'), values.push(patch.email.trim());
 	if (patch.needsProfile !== undefined) sets.push('needs_profile = ?'), values.push(patch.needsProfile ? 1 : 0);
+	if (patch.connectionAccess !== undefined) sets.push('connection_access = ?'), values.push(patch.connectionAccess);
 	if (!sets.length) return getUser(id);
 	db().prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...values, id);
 	if (patch.disabled || patch.role) deleteUserSessions(id); // take effect immediately
@@ -332,6 +390,7 @@ export function touchUserLogin(id: string) {
 }
 
 export function deleteUser(id: string): boolean {
+	db().prepare('DELETE FROM write_unlocks WHERE user_id = ?').run(id);
 	return Number(db().prepare('DELETE FROM users WHERE id = ?').run(id).changes) > 0;
 }
 
@@ -363,9 +422,10 @@ export function deleteUserSessions(userId: string) {
 
 // --- history -----------------------------------------------------------------
 
-export function addHistory(entry: Omit<HistoryEntry, 'id' | 'createdAt'>) {
+export function addHistory(entry: Omit<HistoryEntry, 'id' | 'createdAt' | 'connectionName'>) {
 	db().prepare(
-		'INSERT INTO history (connection_id, sql, ok, row_count, duration_ms, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+		`INSERT INTO history (connection_id, sql, ok, row_count, duration_ms, error, created_at, user_id, user_email, read_only)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	).run(
 		entry.connectionId,
 		entry.sql,
@@ -373,32 +433,153 @@ export function addHistory(entry: Omit<HistoryEntry, 'id' | 'createdAt'>) {
 		entry.rowCount,
 		Math.round(entry.durationMs),
 		entry.error,
-		new Date().toISOString()
+		new Date().toISOString(),
+		entry.userId,
+		entry.userEmail,
+		entry.readOnly ? 1 : 0
 	);
-	// Keep the most recent 500 entries per connection.
+	// Keep the most recent 2000 entries per connection.
 	db().prepare(
 		`DELETE FROM history WHERE connection_id = ? AND id NOT IN (
-			SELECT id FROM history WHERE connection_id = ? ORDER BY id DESC LIMIT 500)`
+			SELECT id FROM history WHERE connection_id = ? ORDER BY id DESC LIMIT 2000)`
 	).run(entry.connectionId, entry.connectionId);
 }
 
-export function listHistory(connectionId: string, limit = 100): HistoryEntry[] {
-	return (
-		db()
-			.prepare('SELECT * FROM history WHERE connection_id = ? ORDER BY id DESC LIMIT ?')
-			.all(connectionId, limit) as Row[]
-	).map((r) => ({
+function toHistory(r: Row): HistoryEntry {
+	return {
 		id: r.id as number,
 		connectionId: r.connection_id as string,
+		connectionName: (r.connection_name as string) ?? undefined,
 		sql: r.sql as string,
 		ok: r.ok === 1,
 		rowCount: (r.row_count as number) ?? null,
 		durationMs: r.duration_ms as number,
 		error: (r.error as string) ?? null,
-		createdAt: r.created_at as string
+		createdAt: r.created_at as string,
+		userId: (r.user_id as string) ?? null,
+		userEmail: (r.user_email as string) ?? null,
+		readOnly: r.read_only !== 0
+	};
+}
+
+/** A connection's history; `userId` limits it to that user's own queries. */
+export function listHistory(connectionId: string, limit = 100, userId?: string): HistoryEntry[] {
+	const rows = userId
+		? db().prepare('SELECT * FROM history WHERE connection_id = ? AND user_id = ? ORDER BY id DESC LIMIT ?').all(connectionId, userId, limit)
+		: db().prepare('SELECT * FROM history WHERE connection_id = ? ORDER BY id DESC LIMIT ?').all(connectionId, limit);
+	return (rows as Row[]).map(toHistory);
+}
+
+export function clearHistory(connectionId: string, userId?: string) {
+	if (userId) db().prepare('DELETE FROM history WHERE connection_id = ? AND user_id = ?').run(connectionId, userId);
+	else db().prepare('DELETE FROM history WHERE connection_id = ?').run(connectionId);
+}
+
+export interface AuditFilter {
+	userId?: string;
+	connectionId?: string;
+	/** Only statements that ran with write access. */
+	writes?: boolean;
+	errors?: boolean;
+	q?: string;
+	before?: number;
+	limit?: number;
+}
+
+/** Queries across every connection, newest first, for the audit log. */
+export function searchHistory(f: AuditFilter): HistoryEntry[] {
+	const where: string[] = [];
+	const values: (string | number)[] = [];
+	if (f.userId) where.push('h.user_id = ?'), values.push(f.userId);
+	if (f.connectionId) where.push('h.connection_id = ?'), values.push(f.connectionId);
+	if (f.writes) where.push('h.read_only = 0');
+	if (f.errors) where.push('h.ok = 0');
+	if (f.q) where.push('h.sql LIKE ?'), values.push(`%${f.q}%`);
+	if (f.before) where.push('h.id < ?'), values.push(f.before);
+	const rows = db()
+		.prepare(
+			`SELECT h.*, c.name AS connection_name FROM history h LEFT JOIN connections c ON c.id = h.connection_id
+			 ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY h.id DESC LIMIT ?`
+		)
+		.all(...values, Math.min(f.limit ?? 100, 500)) as Row[];
+	return rows.map(toHistory);
+}
+
+// --- audit -------------------------------------------------------------------
+
+export function addAudit(e: Omit<AuditEvent, 'id' | 'at'>) {
+	db().prepare(
+		'INSERT INTO audit (at, user_id, user_email, action, connection_id, connection_name, detail, ip) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+	).run(new Date().toISOString(), e.userId, e.userEmail, e.action, e.connectionId, e.connectionName, e.detail, e.ip);
+	db().prepare('DELETE FROM audit WHERE id <= (SELECT max(id) - 20000 FROM audit)').run();
+}
+
+export function searchAudit(f: AuditFilter & { action?: string }): AuditEvent[] {
+	const where: string[] = [];
+	const values: (string | number)[] = [];
+	if (f.userId) where.push('user_id = ?'), values.push(f.userId);
+	if (f.connectionId) where.push('connection_id = ?'), values.push(f.connectionId);
+	if (f.action) where.push('action LIKE ?'), values.push(`${f.action}%`);
+	if (f.q) where.push('(detail LIKE ? OR connection_name LIKE ? OR user_email LIKE ?)'), values.push(`%${f.q}%`, `%${f.q}%`, `%${f.q}%`);
+	if (f.before) where.push('id < ?'), values.push(f.before);
+	const rows = db()
+		.prepare(`SELECT * FROM audit ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`)
+		.all(...values, Math.min(f.limit ?? 100, 500)) as Row[];
+	return rows.map((r) => ({
+		id: r.id as number,
+		at: r.at as string,
+		userId: (r.user_id as string) ?? null,
+		userEmail: (r.user_email as string) ?? null,
+		action: r.action as string,
+		connectionId: (r.connection_id as string) ?? null,
+		connectionName: (r.connection_name as string) ?? null,
+		detail: (r.detail as string) ?? null,
+		ip: (r.ip as string) ?? null
 	}));
 }
 
-export function clearHistory(connectionId: string) {
-	db().prepare('DELETE FROM history WHERE connection_id = ?').run(connectionId);
+// --- access ------------------------------------------------------------------
+
+export function listGrants(userId: string): Grant[] {
+	return (db().prepare('SELECT connection_id, can_write FROM grants WHERE user_id = ?').all(userId) as Row[]).map((r) => ({
+		connectionId: r.connection_id as string,
+		canWrite: r.can_write === 1
+	}));
+}
+
+export function getGrant(userId: string, connectionId: string): Grant | undefined {
+	const r = db().prepare('SELECT can_write FROM grants WHERE user_id = ? AND connection_id = ?').get(userId, connectionId) as Row | undefined;
+	return r && { connectionId, canWrite: r.can_write === 1 };
+}
+
+export function setGrants(userId: string, grants: Grant[]) {
+	const h = db();
+	h.exec('BEGIN');
+	try {
+		h.prepare('DELETE FROM grants WHERE user_id = ?').run(userId);
+		const ins = h.prepare('INSERT INTO grants (user_id, connection_id, can_write) VALUES (?, ?, ?)');
+		for (const g of grants) if (getConnection(g.connectionId)) ins.run(userId, g.connectionId, g.canWrite ? 1 : 0);
+		h.exec('COMMIT');
+	} catch (err) {
+		h.exec('ROLLBACK');
+		throw err;
+	}
+}
+
+export function setUnlock(userId: string, connectionId: string, expiresAt: number, reason: string | null) {
+	db().prepare(
+		`INSERT INTO write_unlocks (user_id, connection_id, expires_at, reason) VALUES (?, ?, ?, ?)
+		 ON CONFLICT(user_id, connection_id) DO UPDATE SET expires_at = excluded.expires_at, reason = excluded.reason`
+	).run(userId, connectionId, expiresAt, reason);
+}
+
+export function clearUnlock(userId: string, connectionId: string) {
+	db().prepare('DELETE FROM write_unlocks WHERE user_id = ? AND connection_id = ?').run(userId, connectionId);
+}
+
+/** When the user's temporary write access ends, if it's active. */
+export function unlockedUntil(userId: string, connectionId: string): number | null {
+	db().prepare('DELETE FROM write_unlocks WHERE expires_at < ?').run(Date.now());
+	const r = db().prepare('SELECT expires_at FROM write_unlocks WHERE user_id = ? AND connection_id = ?').get(userId, connectionId) as Row | undefined;
+	return r ? (r.expires_at as number) : null;
 }

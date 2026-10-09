@@ -7,7 +7,7 @@
 	import StructureView from '#lib/components/StructureView.svelte';
 	import QueryView from '#lib/components/QueryView.svelte';
 	import ServerOverview from '#lib/components/ServerOverview.svelte';
-	import AccessBadge from '#lib/components/AccessBadge.svelte';
+	import WriteAccess from '#lib/components/WriteAccess.svelte';
 	import SchemaDiagram from '#lib/components/SchemaDiagram.svelte';
 	import { api, errorMessage } from '#lib/client/api.ts';
 	import { COLORS } from '#lib/client/format.ts';
@@ -25,8 +25,8 @@
 
 	// Prefer the live store copy so edits (e.g. toggling read-only) apply without a reload.
 	const conn = $derived(connections.list.find((c) => c.id === data.connection.id) ?? data.connection);
-	// Viewers always query read-only, whatever the connection allows.
-	const readOnly = $derived(conn.readOnly || !isAdmin());
+	// What this user may do here comes from the server (role, grants, temporary unlocks).
+	const readOnly = $derived(conn.access?.readOnly ?? true);
 
 	let tree = $state<Tree | null>(null);
 	let treeLoading = $state(false);
@@ -135,7 +135,7 @@
 			<h1 class="truncate text-[14px] leading-tight font-semibold">{conn.name}</h1>
 			<p class="truncate font-mono text-[11px] text-muted-foreground">{conn.user}@{conn.host}:{conn.port}/{conn.database}</p>
 		</div>
-		<AccessBadge {readOnly} />
+		<WriteAccess {conn} />
 		<div class="ml-auto flex items-center gap-1.5">
 			<button class="btn btn-secondary btn-sm" onclick={() => openQuery()} title="New query (⌘K)"><SquareTerminal />New query</button>
 			<button class="btn btn-secondary btn-sm" onclick={openDiagram} title="Schema diagram"><Network />Diagram</button>

@@ -3,6 +3,7 @@ import { recall } from '#lib/server/discovery/cache.ts';
 import { BadRequest, handler } from '#lib/server/http.ts';
 import { closePool, NotFound } from '#lib/server/pg.ts';
 import { getConnection, updateConnection } from '#lib/server/store.ts';
+import { audit } from '#lib/server/permissions.ts';
 import type { RequestHandler } from './$types';
 
 /**
@@ -10,7 +11,7 @@ import type { RequestHandler } from './$types';
  * network change), keeping its name, access mode and color. The password is refreshed
  * too when the scan found one.
  */
-export const POST: RequestHandler = handler(async ({ request }) => {
+export const POST: RequestHandler = handler(async ({ request, locals }) => {
 	const { key, connectionId, host, port } = (await request.json()) as { key?: string; connectionId?: string; host?: string; port?: number };
 	if (!key || !connectionId) throw new BadRequest('"key" and "connectionId" are required');
 	const c = recall(key);
@@ -29,5 +30,6 @@ export const POST: RequestHandler = handler(async ({ request }) => {
 		color: existing.color
 	});
 	closePool(connectionId);
+	if (updated) audit(locals, 'connection.update', { connection: updated, detail: `address ${updated.host}:${updated.port} (from Discover)` });
 	return json(updated);
 });

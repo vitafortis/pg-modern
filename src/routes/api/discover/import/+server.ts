@@ -3,6 +3,7 @@ import { recall } from '#lib/server/discovery/cache.ts';
 import { BadRequest, handler } from '#lib/server/http.ts';
 import { createConnection } from '#lib/server/store.ts';
 import type { Connection } from '#lib/types.ts';
+import { audit } from '#lib/server/permissions.ts';
 import type { RequestHandler } from './$types';
 
 interface ImportItem {
@@ -15,7 +16,7 @@ interface ImportItem {
 }
 
 /** Saves discovered candidates. Passwords come from the server-side scan cache, not the browser. */
-export const POST: RequestHandler = handler(async ({ request }) => {
+export const POST: RequestHandler = handler(async ({ request, locals }) => {
 	const { items } = (await request.json()) as { items: ImportItem[] };
 	if (!Array.isArray(items) || !items.length) throw new BadRequest('"items" is required');
 	const created: Connection[] = [];
@@ -40,5 +41,6 @@ export const POST: RequestHandler = handler(async ({ request }) => {
 			})
 		);
 	}
+	for (const c of created) audit(locals, 'connection.import', { connection: c, detail: `${c.user}@${c.host}:${c.port}/${c.database} from ${c.source.kind}` });
 	return json({ created, missing });
 });

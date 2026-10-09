@@ -3,6 +3,7 @@ import { startSession, throttled } from '#lib/server/auth.ts';
 import { localLoginDisabled } from '#lib/server/sso.ts';
 import { hashPassword, verifyPassword } from '#lib/server/crypto.ts';
 import { findUserByEmail, getPasswordHash } from '#lib/server/store.ts';
+import { audit } from '#lib/server/permissions.ts';
 import type { RequestHandler } from './$types';
 
 // Verified against when the user doesn't exist, so timing doesn't reveal valid emails.
@@ -16,7 +17,11 @@ export const POST: RequestHandler = async ({ request, cookies, locals, getClient
 	const user = findUserByEmail(email);
 	const hash = user && !user.disabled ? getPasswordHash(user.id) : undefined;
 	const ok = verifyPassword(password, hash ?? DUMMY_HASH) && !!hash;
-	if (!user || !ok) return json({ message: 'Incorrect email or password' }, { status: 401 });
+	if (!user || !ok) {
+		audit(locals, 'auth.login_failed', { detail: email.slice(0, 200) });
+		return json({ message: 'Incorrect email or password' }, { status: 401 });
+	}
 	startSession(cookies, user.id, locals.secure);
+	audit(locals, 'auth.login', { as: user, detail: 'password' });
 	return json({ ok: true });
 };

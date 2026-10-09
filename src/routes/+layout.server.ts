@@ -1,6 +1,6 @@
 import { redirect } from '@sveltejs/kit';
 import type { LayoutServerLoad } from './$types';
-import { listConnections } from '#lib/server/store.ts';
+import { visibleConnections } from '#lib/server/permissions.ts';
 import { ADMIN_PAGES } from '#lib/server/access.ts';
 import type { Viewer } from '#lib/types.ts';
 
@@ -19,6 +19,6 @@ export const load: LayoutServerLoad = ({ locals, url }) => {
 		auth: locals.auth,
 		viewer,
 		needsProfile: !!user?.needsProfile,
-		connections: user ? listConnections() : []
+		connections: visibleConnections(user)
 	};
 };

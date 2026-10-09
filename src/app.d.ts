@@ -12,6 +12,8 @@ declare global {
 			origin: string;
 			/** Whether the browser connection is https, for Secure cookies. */
 			secure: boolean;
+			/** Client address, for the audit log. */
+			ip?: string;
 		}
 	}
 }

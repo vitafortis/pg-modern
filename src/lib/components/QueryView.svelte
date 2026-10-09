@@ -5,10 +5,11 @@
 	import DataGrid, { type SelectedCell } from './DataGrid.svelte';
 	import CellInspector from './CellInspector.svelte';
 	import Dialog from './Dialog.svelte';
-	import { api, errorMessage } from '#lib/client/api.ts';
+	import { api, ApiError, errorMessage } from '#lib/client/api.ts';
 	import { ago, csv, download, duration, int } from '#lib/client/format.ts';
 	import { splitRanges } from '#lib/sql-split.ts';
 	import type { HistoryEntry, QueryError, QueryResult } from '#lib/types.ts';
+	import { session } from '#lib/client/state.svelte.ts';
 
 	type Outcome = {
 		results: (QueryResult & { sql: string })[];
@@ -54,7 +55,7 @@
 		execute(text);
 	}
 
-	async function execute(text: string) {
+	async function execute(text: string, confirmed = false) {
 		pending = null;
 		running = true;
 		selected = null;
@@ -62,10 +63,12 @@
 		const started = performance.now();
 		const timer = setInterval(() => (elapsed = performance.now() - started), 100);
 		try {
-			outcome = await api.post<Outcome>(`/api/connections/${connectionId}/query`, { sql: text, runId });
+			outcome = await api.post<Outcome>(`/api/connections/${connectionId}/query`, { sql: text, runId, confirmed });
 			active = Math.max(0, outcome.results.length - 1);
 		} catch (err) {
-			outcome = { results: [], error: { message: errorMessage(err), statementIndex: 0, sql: text } };
+			// The server's own check caught something destructive; ask, then resend confirmed.
+			if (err instanceof ApiError && err.status === 409 && err.detail && 'confirm' in err.detail) pending = text;
+			else outcome = { results: [], error: { message: errorMessage(err), statementIndex: 0, sql: text } };
 		} finally {
 			clearInterval(timer);
 			running = false;
@@ -248,7 +251,7 @@
 						<button class="block w-full px-3 py-2 text-left hover:bg-accent/50" onclick={() => (sql = h.sql)}>
 							<pre class="line-clamp-3 font-mono text-[11px] whitespace-pre-wrap {h.ok ? '' : 'text-danger'}">{h.sql}</pre>
 							<p class="mt-1 text-[10px] text-muted-foreground">
-								{ago(h.createdAt)} · {duration(h.durationMs)}{#if h.rowCount != null} · {h.rowCount} rows{/if}
+								{#if h.userEmail && h.userEmail !== session.viewer?.email}<span class="text-foreground/80">{h.userEmail}</span> · {/if}{#if !h.readOnly}<span class="text-warning">write</span> · {/if}{ago(h.createdAt)} · {duration(h.durationMs)}{#if h.rowCount != null} · {h.rowCount} rows{/if}
 							</p>
 						</button>
 					{:else}
@@ -260,10 +263,10 @@
 	</div>
 </div>
 
-<Dialog bind:open={() => pending !== null, (v) => !v && (pending = null)} title="Run destructive statement?" description="This connection is read/write. The statement below can't be undone.">
+<Dialog bind:open={() => pending !== null, (v) => !v && (pending = null)} title="Run destructive statement?" description="You have write access here. Dropping, truncating, or changing every row can't be undone.">
 	<pre class="max-h-48 overflow-auto rounded-lg border border-border bg-surface p-3 font-mono text-xs">{pending}</pre>
 	{#snippet footer()}
 		<button class="btn btn-secondary" onclick={() => (pending = null)}>Cancel</button>
-		<button class="btn btn-danger" onclick={() => pending && execute(pending)}>Run it</button>
+		<button class="btn btn-danger" onclick={() => pending && execute(pending, true)}>Run it</button>
 	{/snippet}
 </Dialog>

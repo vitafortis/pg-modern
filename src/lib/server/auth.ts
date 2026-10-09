@@ -19,6 +19,7 @@ const OPEN_USER: User = {
 	sso: false,
 	disabled: false,
 	needsProfile: false,
+	connectionAccess: 'all',
 	createdAt: new Date(0).toISOString(),
 	lastLoginAt: null
 };

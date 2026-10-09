@@ -38,6 +38,8 @@ export interface Connection {
 	createdAt: string;
 	updatedAt: string;
 	lastConnectedAt: string | null;
+	/** What the signed-in user may do here (set on responses to the browser). */
+	access?: ConnectionAccess;
 }
 
 /** A connection proposed by Docker or .env discovery. */
@@ -202,6 +204,12 @@ export interface QueryError {
 export interface HistoryEntry {
 	id: number;
 	connectionId: string;
+	/** Filled in by audit searches. */
+	connectionName?: string;
+	userId: string | null;
+	userEmail: string | null;
+	/** False when the statement ran with write access. */
+	readOnly: boolean;
 	sql: string;
 	ok: boolean;
 	rowCount: number | null;
@@ -265,6 +273,8 @@ export interface User {
 	disabled: boolean;
 	/** Must set a real email/name before using the app (upgraded installs). */
 	needsProfile: boolean;
+	/** Viewers: every connection (read-only), or only those granted. Admins see everything. */
+	connectionAccess: 'all' | 'selected';
 	createdAt: string;
 	lastLoginAt: string | null;
 }
@@ -276,4 +286,32 @@ export interface Viewer {
 	role: Role;
 	hasPassword: boolean;
 	sso: boolean;
+}
+
+export interface Grant {
+	connectionId: string;
+	/** May unlock temporary write access. */
+	canWrite: boolean;
+}
+
+/** What the current user may do on one connection. */
+export interface ConnectionAccess {
+	/** `always`: writes are allowed; `unlock`: may unlock temporarily; `never`: read-only. */
+	write: 'always' | 'unlock' | 'never';
+	/** Epoch ms when temporary write access ends, if it's active. */
+	unlockedUntil: number | null;
+	/** Whether queries run read-only right now. */
+	readOnly: boolean;
+}
+
+export interface AuditEvent {
+	id: number;
+	at: string;
+	userId: string | null;
+	userEmail: string | null;
+	action: string;
+	connectionId: string | null;
+	connectionName: string | null;
+	detail: string | null;
+	ip: string | null;
 }

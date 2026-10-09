@@ -18,7 +18,8 @@
 		PanelLeftOpen,
 		Users,
 		Plug,
-		Trash2
+		Trash2,
+		ScrollText
 	} from '@lucide/svelte';
 	import { removeConnection } from '#lib/client/connections.ts';
 	import Logo from '#lib/components/Logo.svelte';
@@ -59,6 +60,7 @@
 					{ href: '/discover', label: 'Discover', icon: Radar },
 					{ href: '/integrations', label: 'Integrations', icon: Plug },
 					{ href: '/users', label: 'Users', icon: Users },
+					{ href: '/audit', label: 'Audit log', icon: ScrollText },
 					{ href: '/settings', label: 'Settings', icon: Settings }
 				]
 			: [])
@@ -150,7 +152,7 @@
 							{#if !collapsed}
 								<span class="min-w-0 flex-1 truncate">{c.name}</span>
 								<span class={isAdmin() ? 'group-focus-within:hidden group-hover:hidden' : ''}>
-									{#if c.readOnly || !isAdmin()}
+									{#if c.access?.readOnly ?? true}
 										<Lock class="size-3 shrink-0 opacity-40" />
 									{:else}
 										<PencilLine class="size-3 shrink-0 text-warning" />
