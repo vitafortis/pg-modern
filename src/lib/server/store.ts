@@ -583,3 +583,10 @@ export function unlockedUntil(userId: string, connectionId: string): number | nu
 	const r = db().prepare('SELECT expires_at FROM write_unlocks WHERE user_id = ? AND connection_id = ?').get(userId, connectionId) as Row | undefined;
 	return r ? (r.expires_at as number) : null;
 }
+
+// --- backup ------------------------------------------------------------------
+
+/** The raw handle, for backup/restore, which reads and writes whole tables in one transaction. */
+export function sqlite(): DatabaseSync {
+	return db();
+}
