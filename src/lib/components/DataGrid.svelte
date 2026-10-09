@@ -12,6 +12,7 @@
 </script>
 
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import { ArrowDown, ArrowUp, KeyRound } from '@lucide/svelte';
 	import { cellText } from '#lib/client/format.ts';
 
@@ -22,7 +23,14 @@
 		sort,
 		onsort,
 		primaryKeys = [],
-		selected = $bindable(null)
+		selected = $bindable(null),
+		rowState,
+		cellState,
+		onactivate,
+		checked,
+		oncheck,
+		editing = null,
+		editor
 	}: {
 		fields: GridField[];
 		rows: unknown[][];
@@ -31,6 +39,18 @@
 		onsort?: (column: string) => void;
 		primaryKeys?: string[];
 		selected?: SelectedCell | null;
+		/** Staged edits (table browser): marks new and deleted rows… */
+		rowState?: (row: number) => 'new' | 'deleted' | null;
+		/** …and edited cells, or new-row cells that will get the column default. */
+		cellState?: (row: number, col: number) => 'edited' | 'default' | null;
+		/** Double-click or Enter on a cell (start editing). */
+		onactivate?: (row: number, col: number) => void;
+		/** Selected rows (row-number gutter), for deleting. */
+		checked?: Set<number>;
+		oncheck?: (row: number, e: MouseEvent) => void;
+		/** The cell being edited, rendered with `editor`. */
+		editing?: { row: number; col: number } | null;
+		editor?: Snippet<[number, number]>;
 	} = $props();
 
 	const ROW_H = 30;
@@ -81,6 +101,18 @@
 		selected = { row, col, value: rows[row][col], field: fields[col] };
 	}
 
+	/** Scrolls a row into view (e.g. a row that was just added at the end). */
+	export function scrollToRow(row: number) {
+		const top = row * ROW_H;
+		if (top < viewport.scrollTop) viewport.scrollTop = top;
+		else if (top + ROW_H > viewport.scrollTop + height - HEADER_H) viewport.scrollTop = top + ROW_H - height + HEADER_H;
+		scrollTop = viewport.scrollTop;
+	}
+
+	export function focus() {
+		viewport.focus();
+	}
+
 	function onkeydown(e: KeyboardEvent) {
 		if (!selected) return;
 		const moves: Record<string, [number, number]> = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
@@ -93,6 +125,9 @@
 			const top = row * ROW_H;
 			if (top < viewport.scrollTop) viewport.scrollTop = top;
 			else if (top + ROW_H > viewport.scrollTop + height - HEADER_H) viewport.scrollTop = top + ROW_H - height + HEADER_H;
+		} else if (e.key === 'Enter' && onactivate) {
+			e.preventDefault();
+			onactivate(selected.row, selected.col);
 		} else if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
 			navigator.clipboard.writeText(cellText(selected.value));
 		} else if (e.key === 'Escape') {
@@ -142,24 +177,47 @@
 		<div style="transform:translateY({start * ROW_H}px)">
 			{#each visible as row, vi (start + vi)}
 				{@const r = start + vi}
+				{@const rs = rowState?.(r) ?? null}
 				<div
-					class="grid border-b border-border/50 {r % 2 ? 'bg-muted/25' : ''} hover:bg-accent/40"
+					class="grid border-b border-border/50 {rs === 'new' ? 'bg-success/10' : rs === 'deleted' ? 'bg-danger/10 text-muted-foreground line-through' : r % 2 ? 'bg-muted/25' : ''} hover:bg-accent/40"
 					style="grid-template-columns:{template}; height:{ROW_H}px"
 					role="row"
 				>
-					<div class="sticky left-0 flex items-center justify-end border-r border-border bg-surface pr-2.5 text-[11px] text-muted-foreground/70 tabular-nums">
-						{offset + r + 1}
-					</div>
+					{#if oncheck}
+						<button
+							class="sticky left-0 z-[1] flex items-center justify-end border-r border-border pr-2.5 text-[11px] tabular-nums {checked?.has(r)
+								? 'bg-primary text-primary-foreground'
+								: rs === 'new'
+									? 'bg-surface font-semibold text-success hover:bg-accent'
+									: 'bg-surface text-muted-foreground/70 hover:bg-accent'}"
+							title="Select row (⇧ range, ⌘ toggle)"
+							aria-pressed={checked?.has(r) ?? false}
+							onclick={(e) => oncheck(r, e)}
+						>
+							{rs === 'new' ? 'new' : offset + r + 1}
+						</button>
+					{:else}
+						<div class="sticky left-0 flex items-center justify-end border-r border-border bg-surface pr-2.5 text-[11px] text-muted-foreground/70 tabular-nums">
+							{offset + r + 1}
+						</div>
+					{/if}
 					{#each row as value, c (c)}
 						{@const sel = selected?.row === r && selected?.col === c}
+						{@const cs = cellState?.(r, c) ?? null}
 						<!-- svelte-ignore a11y_click_events_have_key_events -->
 						<div
 							role="gridcell"
 							tabindex="-1"
 							onclick={() => select(r, c)}
-							class="flex min-w-0 items-center border-r border-border/40 px-2.5 {sel ? 'bg-primary-soft ring-1 ring-primary ring-inset' : ''} {isNumeric(fields[c].type) ? 'justify-end tabular-nums' : ''}"
+							ondblclick={() => onactivate?.(r, c)}
+							class="relative flex min-w-0 items-center border-r border-border/40 px-2.5 {cs === 'edited' ? 'bg-warning/15 ring-1 ring-warning/60 ring-inset' : ''} {sel ? 'bg-primary-soft ring-1 ring-primary ring-inset' : ''} {isNumeric(fields[c].type) ? 'justify-end tabular-nums' : ''}"
 						>
-							{#if value === null || value === undefined}
+							{#if editing && editing.row === r && editing.col === c && editor}
+								{@render editor(r, c)}
+							{/if}
+							{#if cs === 'default'}
+								<span class="text-[11px] text-muted-foreground/60 italic">DEFAULT</span>
+							{:else if value === null || value === undefined}
 								<span class="text-[11px] text-muted-foreground/50 italic">NULL</span>
 							{:else if typeof value === 'boolean'}
 								<span class={value ? 'text-success' : 'text-muted-foreground'}>{value}</span>
