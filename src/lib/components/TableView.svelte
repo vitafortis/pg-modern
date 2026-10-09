@@ -4,17 +4,19 @@
 	import CellInspector from './CellInspector.svelte';
 	import { api, errorMessage } from '#lib/client/api.ts';
 	import { csv, download, int } from '#lib/client/format.ts';
-	import type { ColumnInfo } from '#lib/types.ts';
+	import { quoteIdentFor } from '#lib/engine.ts';
+	import type { ColumnInfo, Engine } from '#lib/types.ts';
 
 	type Op = '=' | '!=' | '<' | '>' | '<=' | '>=' | 'contains' | 'starts' | 'null' | 'notnull';
 	type FilterRow = { column: string; op: Op; value: string };
 
 	let {
 		connectionId,
+		engine = 'postgres',
 		schema,
 		table,
 		onquery
-	}: { connectionId: string; schema: string; table: string; onquery: (sql: string) => void } = $props();
+	}: { connectionId: string; engine?: Engine; schema: string; table: string; onquery: (sql: string) => void } = $props();
 
 	let columns = $state<ColumnInfo[]>([]);
 	let rows = $state<unknown[][]>([]);
@@ -119,7 +121,7 @@
 	const pageEnd = $derived(offset + rows.length);
 	const hasNext = $derived(total == null ? rows.length === limit : pageEnd < total);
 
-	const ident = (s: string) => `"${s.replace(/"/g, '""')}"`;
+	const ident = (s: string) => quoteIdentFor(engine, s);
 	function openInSql() {
 		const order = sort ? `\norder by ${ident(sort.column)} ${sort.dir}` : '';
 		onquery(`select *\nfrom ${ident(schema)}.${ident(table)}${order}\nlimit ${limit};`);

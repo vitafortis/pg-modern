@@ -62,7 +62,7 @@
 				.filter((c) => c.candidates.length)
 		}))
 	);
-	const OTHER_DB = /mariadb|mysql|percona|mongo|redis|valkey|keydb|influx|clickhouse|elastic|opensearch|couch|neo4j|cassandra|mssql|sqlserver|dragonfly|memcached|etcd/i;
+	const OTHER_DB = /mongo|redis|valkey|keydb|influx|clickhouse|elastic|opensearch|couch|neo4j|cassandra|mssql|sqlserver|dragonfly|memcached|etcd/i;
 	const otherEngine = (image: string) => OTHER_DB.exec(image)?.[0].toLowerCase();
 
 	const runningStatus = (s: string) => /running|up/i.test(s) && !/^stopped/i.test(s);
@@ -239,7 +239,7 @@
 
 <div class="flex h-full flex-col">
 	<div class="min-h-0 flex-1 overflow-y-auto">
-		<PageHeader title="Discover" description="Find Postgres servers in containers, .env, compose and Terraform files, and Arcane projects.">
+		<PageHeader title="Discover" description="Find Postgres, MySQL and MariaDB servers in containers, .env, compose and Terraform files, and Arcane projects.">
 			{#snippet actions()}
 				<button
 					class="btn btn-secondary"
@@ -364,7 +364,7 @@
 								<div class="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
 									<Server class="size-3.5" /><span class="font-mono">{group.endpoint}</span>
 									{#if group.inspected !== undefined}
-										<span>· inspected {group.inspected} container{group.inspected === 1 ? '' : 's'}, {group.inspected - (group.skipped?.length ?? 0)} with Postgres or Postgres credentials</span>
+										<span>· inspected {group.inspected} container{group.inspected === 1 ? '' : 's'}, {group.inspected - (group.skipped?.length ?? 0)} with a database or database credentials</span>
 									{/if}
 								</div>
 								{#if group.error}
@@ -374,7 +374,7 @@
 								{/if}
 								{#if !group.error && group.containers.length === 0}
 									<div class="card p-6 text-center text-sm text-muted-foreground">
-										{hidden > 0 ? 'Nothing matches the current filters.' : 'No Postgres containers or database credentials found on this host.'}
+										{hidden > 0 ? 'Nothing matches the current filters.' : 'No database containers or credentials found on this host.'}
 									</div>
 								{/if}
 								<div class="space-y-3">
@@ -399,7 +399,7 @@
 								{#if group.skipped?.length}
 									<details class="card mt-3 overflow-hidden">
 										<summary class="cursor-pointer px-4 py-2.5 text-xs text-muted-foreground select-none hover:text-foreground">
-											{group.skipped.length} other container{group.skipped.length === 1 ? '' : 's'} without Postgres
+											{group.skipped.length} other container{group.skipped.length === 1 ? '' : 's'} without a database
 											{#if group.skipped.some((c) => otherEngine(c.image))}
 												<span class="ml-1">— includes {[...new Set(group.skipped.map((c) => otherEngine(c.image)).filter(Boolean))].join(', ')}, which pg·modern doesn't support</span>
 											{/if}
@@ -410,7 +410,7 @@
 													<span class="size-1.5 shrink-0 rounded-full {c.state === 'running' ? 'bg-success' : 'bg-muted-foreground/40'}"></span>
 													<span class="w-56 shrink-0 truncate font-medium">{c.name}</span>
 													<span class="min-w-0 flex-1 truncate font-mono text-muted-foreground">{c.image}</span>
-													{#if otherEngine(c.image)}<span class="badge">{otherEngine(c.image)} · not Postgres</span>{/if}
+													{#if otherEngine(c.image)}<span class="badge">{otherEngine(c.image)} · not supported</span>{/if}
 												</div>
 											{/each}
 										</div>
@@ -434,7 +434,7 @@
 							<div class="mx-auto grid size-11 place-items-center rounded-xl bg-primary-soft text-primary"><Boxes class="size-5" /></div>
 							<h2 class="mt-4 font-semibold tracking-tight">Read stacks straight from Arcane</h2>
 							<p class="mt-1.5 text-sm text-muted-foreground">
-								Connect an Arcane instance with an API key and pg·modern finds Postgres in every container and project across all of its
+								Connect an Arcane instance with an API key and pg·modern finds Postgres, MySQL and MariaDB in every container and project across all of its
 								environments — no folder mounts or file permissions needed.
 							</p>
 							<a class="btn btn-primary mt-5" href="/integrations#arcane"><Plus />Connect Arcane</a>
@@ -471,7 +471,7 @@
 										{/each}
 										{#if !env.error && !env.projects.length}
 											<div class="card p-4 text-center text-xs text-muted-foreground">
-												{hidden > 0 ? 'Nothing matches the current filters.' : 'No Postgres found in this environment’s projects.'}
+												{hidden > 0 ? 'Nothing matches the current filters.' : 'No databases found in this environment’s projects.'}
 											</div>
 										{/if}
 										<div class="space-y-3">
@@ -495,7 +495,7 @@
 										{#if env.skipped?.length}
 											<details class="card mt-3 overflow-hidden">
 												<summary class="cursor-pointer px-4 py-2.5 text-xs text-muted-foreground select-none hover:text-foreground">
-													{env.skipped.length} other container{env.skipped.length === 1 ? '' : 's'} without Postgres
+													{env.skipped.length} other container{env.skipped.length === 1 ? '' : 's'} without a database
 												</summary>
 												<div class="max-h-80 divide-y divide-border overflow-y-auto border-t border-border">
 													{#each env.skipped as c, i (i)}
@@ -503,7 +503,7 @@
 															<span class="size-1.5 shrink-0 rounded-full {c.state === 'running' ? 'bg-success' : 'bg-muted-foreground/40'}"></span>
 															<span class="w-56 shrink-0 truncate font-medium">{c.name}</span>
 															<span class="min-w-0 flex-1 truncate font-mono text-muted-foreground">{c.image}</span>
-															{#if otherEngine(c.image)}<span class="badge">{otherEngine(c.image)} · not Postgres</span>{/if}
+															{#if otherEngine(c.image)}<span class="badge">{otherEngine(c.image)} · not supported</span>{/if}
 														</div>
 													{/each}
 												</div>
@@ -550,7 +550,7 @@
 				{#if files}
 					{#if visibleFiles.length === 0}
 						<div class="card p-8 text-center text-sm text-muted-foreground">
-							{hidden > 0 ? 'Nothing matches the current filters.' : 'No Postgres credentials found in the scanned folders.'}
+							{hidden > 0 ? 'Nothing matches the current filters.' : 'No database credentials found in the scanned folders.'}
 						</div>
 					{/if}
 					<div class="space-y-3">

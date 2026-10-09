@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { ChevronRight, Eye, Folder, FolderOpen, Layers, RefreshCw, Search, Table2, Globe, Split, LoaderCircle } from '@lucide/svelte';
 	import { compact } from '#lib/client/format.ts';
-	import type { RelationSummary, SchemaTree } from '#lib/types.ts';
+	import type { Engine, RelationSummary, SchemaTree } from '#lib/types.ts';
 
 	let {
 		tree,
+		engine = 'postgres',
+		defaultSchema = 'public',
 		loading,
 		active,
 		showSystem = $bindable(false),
@@ -12,6 +14,9 @@
 		onrefresh
 	}: {
 		tree: SchemaTree | null;
+		engine?: Engine;
+		/** Expanded until the user collapses it. */
+		defaultSchema?: string;
 		loading: boolean;
 		active: string | null;
 		showSystem: boolean;
@@ -20,7 +25,7 @@
 	} = $props();
 
 	let filter = $state('');
-	let expanded = $state<Record<string, boolean>>({ public: true });
+	let expanded = $state<Record<string, boolean>>({});
 
 	const icons = { table: Table2, view: Eye, matview: Layers, foreign: Globe, partitioned: Split };
 
@@ -47,7 +52,7 @@
 
 	<div class="min-h-0 flex-1 overflow-y-auto py-1.5 text-[13px]">
 		{#each schemas as s (s.name)}
-			{@const open = filter ? true : (expanded[s.name] ?? false)}
+			{@const open = filter ? true : (expanded[s.name] ?? s.name === defaultSchema)}
 			<button
 				class="flex h-7 w-full items-center gap-1.5 px-2 text-left text-muted-foreground hover:text-foreground"
 				onclick={() => (expanded[s.name] = !open)}
@@ -86,6 +91,6 @@
 
 	<label class="flex items-center gap-2 border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
 		<input type="checkbox" class="accent-[var(--primary)]" bind:checked={showSystem} />
-		Show system schemas
+		{engine === 'mysql' ? 'Show system databases' : 'Show system schemas'}
 	</label>
 </div>

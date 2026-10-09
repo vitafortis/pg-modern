@@ -133,6 +133,8 @@
 	const tick = (s: number | null) => (s == null ? null : s + elapsed);
 
 	const server = $derived(data?.server.data ?? null);
+	/** MySQL / MariaDB: the process list instead of pg_stat_activity, no vacuum or scan statistics. */
+	const mysql = $derived(data?.engine === 'mysql');
 	const sessions = $derived(data?.sessions.data ?? []);
 	const summary = $derived(summarize(sessions));
 	const byPid = $derived(new Map(sessions.map((s) => [s.pid, s])));
@@ -151,7 +153,7 @@
 	);
 	const rows = $derived(arrangeSessions(filtered));
 	const hiddenCount = $derived(sessions.length - filtered.length);
-	const privilegeHidden = $derived(sessions.some((s) => s.query === '<insufficient privilege>'));
+	const privilegeHidden = $derived(mysql ? !!server && !server.readAllStats : sessions.some((s) => s.query === '<insufficient privilege>'));
 	const waitingLocks = $derived((data?.locks.data ?? []).filter((l) => !l.granted));
 	const heldLocks = $derived((data?.locks.data ?? []).filter((l) => l.granted));
 	const maxDb = $derived(Math.max(1, ...(data?.databases.data ?? []).map((d) => d.bytes ?? 0)));
@@ -186,15 +188,15 @@
 		const ok = await confirmAction(
 			terminate
 				? {
-						title: `Terminate session ${s.pid}?`,
+						title: mysql ? `Kill connection ${s.pid}?` : `Terminate session ${s.pid}?`,
 						body: `Closes ${s.user ?? 'this'}${s.app ? ` (${s.app})` : ''} connection and rolls back any open transaction. This is recorded in the audit log.`,
 						detail: s.query ?? undefined,
 						confirmLabel: 'Terminate session',
 						danger: true
 					}
 				: {
-						title: `Cancel the query on pid ${s.pid}?`,
-						body: 'Interrupts the running statement; the session stays connected. This is recorded in the audit log.',
+						title: mysql ? `Kill the query on thread ${s.pid}?` : `Cancel the query on pid ${s.pid}?`,
+						body: `Interrupts the running statement${mysql ? ' (KILL QUERY)' : ''}; the session stays connected. This is recorded in the audit log.`,
 						detail: s.query ?? undefined,
 						confirmLabel: 'Cancel query'
 					}
@@ -236,7 +238,7 @@
 <div class="h-full overflow-y-auto">
 	<div class="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-border bg-background/85 px-5 py-2 backdrop-blur">
 		<h2 class="flex items-center gap-2 text-[13px] font-semibold"><ActivityIcon class="size-4 text-primary" />Activity</h2>
-		{#if server}<span class="font-mono text-[11px] text-muted-foreground">{server.currentUser}{server.superuser ? ' · superuser' : ''}</span>{/if}
+		{#if server}<span class="font-mono text-[11px] text-muted-foreground">{server.currentUser}{server.superuser ? (mysql ? ' · admin' : ' · superuser') : ''}</span>{/if}
 		<div class="ml-auto flex items-center gap-2">
 			{#if error && data}
 				<span class="badge badge-danger" title={error}><TriangleAlert />Refresh failed</span>
@@ -297,7 +299,7 @@
 				<div class="flex flex-wrap items-center gap-2 rounded-xl border border-warning/30 bg-warning/5 px-3.5 py-2.5 text-[12px]">
 					<TriangleAlert class="size-4 text-warning" />
 					<span>
-						{summary.longTransactions.length === 1 ? 'A transaction has' : `${summary.longTransactions.length} transactions have`} been open longer than {LONG_TXN_SECONDS / 60} minutes. Long transactions hold back vacuum and can block DDL.
+						{summary.longTransactions.length === 1 ? 'A transaction has' : `${summary.longTransactions.length} transactions have`} been open longer than {LONG_TXN_SECONDS / 60} minutes. Long transactions hold back {mysql ? 'InnoDB purge' : 'vacuum'} and can block DDL.
 					</span>
 					{#each summary.longTransactions as pid (pid)}
 						<button class="badge badge-warning font-mono hover:bg-warning/20" title="Show this session" onclick={() => (search = String(pid))}>{pid}</button>
@@ -330,7 +332,12 @@
 				{#if data.sessions.error}
 					<div class="p-4">{@render sectionError(data.sessions.error)}</div>
 				{:else}
-					{#if privilegeHidden}
+					{#if privilegeHidden && mysql}
+						<p class="border-b border-border bg-surface/60 px-4 py-2 text-[11px] text-muted-foreground">
+							Without the <code class="font-mono">PROCESS</code> privilege this account only sees its own threads. Grant
+							<code class="font-mono">PROCESS</code> to see every connection and InnoDB lock waits.
+						</p>
+					{:else if privilegeHidden}
 						<p class="border-b border-border bg-surface/60 px-4 py-2 text-[11px] text-muted-foreground">
 							Some queries show as <code class="font-mono">&lt;insufficient privilege&gt;</code>: this role can only see its own sessions’ details. Grant
 							<code class="font-mono">pg_read_all_stats</code> to see everything.
@@ -340,7 +347,7 @@
 						<table class="w-full min-w-[960px] text-left text-[12px]">
 							<thead class="border-b border-border text-[11px] text-muted-foreground">
 								<tr>
-									<th class="w-28 px-4 py-2 font-medium">PID</th>
+									<th class="w-28 px-4 py-2 font-medium">{mysql ? 'ID' : 'PID'}</th>
 									<th class="w-36 px-2 py-2 font-medium">State</th>
 									<th class="w-44 px-2 py-2 font-medium">User · app</th>
 									<th class="w-32 px-2 py-2 font-medium">Client</th>
@@ -414,10 +421,10 @@
 										<td class="px-4 py-2">
 											{#if !s.self && tone !== 'background'}
 												<div class="flex justify-end gap-0.5">
-													<span title={readOnly ? lockedHint : 'Cancel the running query'}>
+													<span title={readOnly ? lockedHint : mysql ? 'Kill the running query (KILL QUERY)' : 'Cancel the running query'}>
 														<button class="btn btn-ghost btn-icon btn-sm" aria-label="Cancel query on pid {s.pid}" disabled={readOnly || busyPid === s.pid} onclick={() => signal(s, false)}><CircleStop /></button>
 													</span>
-													<span title={readOnly ? lockedHint : 'Terminate the session'}>
+													<span title={readOnly ? lockedHint : mysql ? 'Kill the connection (KILL)' : 'Terminate the session'}>
 														<button class="btn btn-ghost btn-icon btn-sm hover:bg-danger/10 hover:text-danger" aria-label="Terminate session {s.pid}" disabled={readOnly || busyPid === s.pid} onclick={() => signal(s, true)}><OctagonX /></button>
 													</span>
 												</div>
@@ -430,8 +437,13 @@
 											<td colspan="6" class="px-2 pt-1 pb-3">
 												<pre class="max-h-72 overflow-auto rounded-lg border border-border bg-background p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap">{s.query}{s.queryTruncated ? '\n…(truncated)' : ''}</pre>
 												<dl class="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-muted-foreground">
-													<div><dt class="inline">Backend</dt> <dd class="inline font-mono text-foreground">{s.backendType ?? '—'}</dd></div>
-													<div><dt class="inline">Connected</dt> <dd class="inline text-foreground">{ago(s.backendStart)}</dd></div>
+													{#if mysql}
+														{#if s.waitEvent}<div><dt class="inline">State</dt> <dd class="inline font-mono text-foreground">{s.waitEvent}</dd></div>{/if}
+														{#if s.client}<div><dt class="inline">Host</dt> <dd class="inline font-mono text-foreground">{s.client}</dd></div>{/if}
+													{:else}
+														<div><dt class="inline">Backend</dt> <dd class="inline font-mono text-foreground">{s.backendType ?? '—'}</dd></div>
+														<div><dt class="inline">Connected</dt> <dd class="inline text-foreground">{ago(s.backendStart)}</dd></div>
+													{/if}
 													{#if s.xactStart}<div><dt class="inline">Transaction</dt> <dd class="inline text-foreground">{formatAge(tick(s.xactSeconds))}</dd></div>{/if}
 													{#if s.queryStart}<div><dt class="inline">Query started</dt> <dd class="inline text-foreground">{new Date(s.queryStart).toLocaleTimeString()}</dd></div>{/if}
 													{#if s.xidAge != null}<div><dt class="inline">xid age</dt> <dd class="inline font-mono text-foreground">{compact(s.xidAge)}</dd></div>{/if}
@@ -459,7 +471,7 @@
 						{#if data.locks.error}
 							{@render sectionError(data.locks.error)}
 						{:else if !data.locks.data?.length}
-							<p class="text-xs text-muted-foreground">Nothing waiting on a lock, and no strong locks held for over a minute.</p>
+							<p class="text-xs text-muted-foreground">{mysql ? 'Nothing waiting on an InnoDB row lock.' : 'Nothing waiting on a lock, and no strong locks held for over a minute.'}</p>
 						{:else}
 							<div class="space-y-1">
 								{#each [...waitingLocks, ...heldLocks] as l, i (i)}
@@ -512,9 +524,15 @@
 											<th class="px-4 py-1.5 font-medium">Table</th>
 											<th class="w-36 px-2 py-1.5 font-medium">Size</th>
 											<th class="px-2 py-1.5 text-right font-medium">Rows</th>
-											<th class="px-2 py-1.5 text-right font-medium">Dead</th>
-											<th class="px-2 py-1.5 font-medium">Autovacuum</th>
-											<th class="px-4 py-1.5 text-right font-medium" title="Sequential / index scans">Seq / idx</th>
+											{#if mysql}
+												<th class="px-2 py-1.5 font-medium">Engine</th>
+												<th class="px-2 py-1.5 text-right font-medium" title="Allocated but unused space (DATA_FREE)">Free</th>
+												<th class="px-4 py-1.5 font-medium">Last write</th>
+											{:else}
+												<th class="px-2 py-1.5 text-right font-medium">Dead</th>
+												<th class="px-2 py-1.5 font-medium">Autovacuum</th>
+												<th class="px-4 py-1.5 text-right font-medium" title="Sequential / index scans">Seq / idx</th>
+											{/if}
 										</tr>
 									</thead>
 									<tbody>
@@ -536,7 +554,12 @@
 														{#if t.sizeEstimated}<Lock class="size-3 text-warning" />{/if}
 													</div>
 												</td>
-												<td class="px-2 py-1.5 text-right text-muted-foreground tabular-nums">{compact(t.liveTuples)}</td>
+												<td class="px-2 py-1.5 text-right text-muted-foreground tabular-nums" title={mysql ? 'Estimate from table statistics' : undefined}>{mysql ? '~' : ''}{compact(t.liveTuples)}</td>
+												{#if mysql}
+													<td class="px-2 py-1.5 font-mono text-[11px] text-muted-foreground">{t.storageEngine ?? '—'}</td>
+													<td class="px-2 py-1.5 text-right text-[11px] text-muted-foreground tabular-nums">{bytes(t.freeBytes)}</td>
+													<td class="px-4 py-1.5 text-[11px] whitespace-nowrap text-muted-foreground" title={t.updatedAt ?? 'Not tracked for this table'}>{t.updatedAt ? ago(t.updatedAt.replace(' ', 'T')) : '—'}</td>
+												{:else}
 												<td class="px-2 py-1.5 text-right tabular-nums">
 													{#if dead == null}
 														<span class="text-muted-foreground">—</span>
@@ -548,6 +571,7 @@
 												</td>
 												<td class="px-2 py-1.5 text-[11px] whitespace-nowrap text-muted-foreground" title={t.lastVacuum ? `manual vacuum ${ago(t.lastVacuum)}` : ''}>{ago(t.lastAutovacuum)}</td>
 												<td class="px-4 py-1.5 text-right font-mono text-[11px] whitespace-nowrap text-muted-foreground tabular-nums">{t.seqScans == null ? '—' : compact(t.seqScans)} / {t.idxScans == null ? '—' : compact(t.idxScans)}</td>
+												{/if}
 											</tr>
 										{/each}
 									</tbody>
@@ -564,12 +588,12 @@
 							<p class="text-xs text-muted-foreground">No indexes on user tables.</p>
 						{:else}
 							<div class="space-y-0.5">
-								{#each data.indexes.data as ix (ix.schema + '.' + ix.name)}
+								{#each data.indexes.data as ix (ix.schema + '.' + ix.table + '.' + ix.name)}
 									<div class="flex items-center gap-2 rounded-md px-2 py-1 text-[12px] hover:bg-accent/40">
 										<span class="truncate font-mono text-[11.5px]" title="{ix.schema}.{ix.table}">{ix.name}</span>
 										<span class="truncate text-[11px] text-muted-foreground">on {ix.table}</span>
 										{#if ix.scans === 0 && !ix.unique}<span class="badge badge-warning" title="Never used since statistics were last reset">unused</span>{/if}
-										<span class="ml-auto shrink-0 text-[11px] text-muted-foreground tabular-nums">{ix.scans == null ? '—' : compact(ix.scans)} scans</span>
+										{#if ix.scans != null || !mysql}<span class="ml-auto shrink-0 text-[11px] text-muted-foreground tabular-nums">{ix.scans == null ? '—' : compact(ix.scans)} scans</span>{:else}<span class="ml-auto"></span>{/if}
 										<span class="w-16 shrink-0 text-right text-[11px] font-medium tabular-nums">{bytes(ix.bytes)}</span>
 									</div>
 								{/each}

@@ -361,7 +361,7 @@
 		<section id="arcane" class="card scroll-mt-6 p-5">
 			<h2 class="flex items-center gap-2 text-[14px] font-semibold"><Boxes class="size-4 text-primary" />Arcane</h2>
 			<p class="mt-1 max-w-2xl text-xs text-muted-foreground">
-				Finds Postgres in every container and project (compose + .env) across all of Arcane's environments — no folder mounts or socket access needed. In Arcane, create a key under
+				Finds Postgres, MySQL and MariaDB in every container and project (compose + .env) across all of Arcane's environments — no folder mounts or socket access needed. In Arcane, create a key under
 				<b class="font-medium text-foreground">Settings → API Keys</b> with only <code class="font-mono">environments:list</code>,
 				<code class="font-mono">projects:list</code>, <code class="font-mono">projects:read</code>, <code class="font-mono">containers:list</code> and
 				<code class="font-mono">containers:read</code> (all read-only).

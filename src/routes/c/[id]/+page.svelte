@@ -9,6 +9,7 @@
 	import QueryView from '#lib/components/QueryView.svelte';
 	import ServerOverview from '#lib/components/ServerOverview.svelte';
 	import WriteAccess from '#lib/components/WriteAccess.svelte';
+	import EngineBadge from '#lib/components/EngineBadge.svelte';
 	import SchemaDiagram from '#lib/components/SchemaDiagram.svelte';
 	import ActivityView from '#lib/components/ActivityView.svelte';
 	import SavedQueriesMenu from '#lib/components/SavedQueriesMenu.svelte';
@@ -32,8 +33,11 @@
 	const conn = $derived(connections.list.find((c) => c.id === data.connection.id) ?? data.connection);
 	// What this user may do here comes from the server (role, grants, temporary unlocks).
 	const readOnly = $derived(conn.access?.readOnly ?? true);
+	const engine = $derived(conn.engine ?? 'postgres');
 
 	let tree = $state<Tree | null>(null);
+	// The schema to open first: public on Postgres, the connection's database on MySQL.
+	const defaultSchema = $derived(engine === 'mysql' ? conn.database || tree?.schemas[0]?.name || '' : 'public');
 	let treeLoading = $state(false);
 	let showSystem = $state(false);
 	let completion = $state<Record<string, Record<string, string[]>>>({});
@@ -110,7 +114,8 @@
 	}
 
 	function openDiagram() {
-		const schema = active?.kind === 'table' ? active.schema : (tree?.schemas.find((s) => s.name === 'public') ?? tree?.schemas[0])?.name ?? 'public';
+		const schema =
+			active?.kind === 'table' ? active.schema : ((tree?.schemas.find((s) => s.name === defaultSchema) ?? tree?.schemas[0])?.name ?? defaultSchema);
 		if (!tabs.some((t) => t.id === 'diagram')) tabs.push({ id: 'diagram', kind: 'diagram', schema });
 		activeId = 'diagram';
 	}
@@ -149,6 +154,7 @@
 			<h1 class="truncate text-[14px] leading-tight font-semibold">{conn.name}</h1>
 			<p class="truncate font-mono text-[11px] text-muted-foreground">{conn.user}@{conn.host}:{conn.port}/{conn.database}</p>
 		</div>
+		<EngineBadge {engine} flavor={conn.flavor} />
 		<WriteAccess {conn} />
 		<div class="ml-auto flex items-center gap-1.5">
 			<button class="btn btn-secondary btn-sm" onclick={() => openQuery()} title="New query (⌘K)"><SquareTerminal />New query</button>
@@ -163,7 +169,7 @@
 
 	<div class="flex min-h-0 flex-1">
 		<div class="w-64 shrink-0 border-r border-border bg-surface/60">
-			<SchemaTree {tree} loading={treeLoading} active={activeTableKey} bind:showSystem onopen={(s, r) => openTable(s, r.name, r.kind)} onrefresh={() => (loadTree(), loadCompletion())} />
+			<SchemaTree {tree} {engine} {defaultSchema} loading={treeLoading} active={activeTableKey} bind:showSystem onopen={(s, r) => openTable(s, r.name, r.kind)} onrefresh={() => (loadTree(), loadCompletion())} />
 		</div>
 
 		<div class="flex min-w-0 flex-1 flex-col">
@@ -217,7 +223,7 @@
 								</div>
 								<div class="min-h-0 flex-1">
 									{#if t.view === 'data'}
-										<TableView connectionId={conn.id} schema={t.schema} table={t.table} onquery={(sql) => openQuery(sql)} />
+										<TableView connectionId={conn.id} {engine} schema={t.schema} table={t.table} onquery={(sql) => openQuery(sql)} />
 									{:else}
 										<StructureView connectionId={conn.id} schema={t.schema} table={t.table} />
 									{/if}
@@ -228,7 +234,17 @@
 						{:else if t.kind === 'activity'}
 							<ActivityView connectionId={conn.id} {readOnly} active={t.id === activeId} onopen={(s, n) => openTable(s, n)} />
 						{:else}
-							<QueryView connectionId={conn.id} {readOnly} bind:sql={t.sql} {completion} connectionName={conn.name} bind:savedQuery={t.saved} />
+							<QueryView
+								connectionId={conn.id}
+								{readOnly}
+								{engine}
+								flavor={conn.flavor}
+								{defaultSchema}
+								bind:sql={t.sql}
+								{completion}
+								connectionName={conn.name}
+								bind:savedQuery={t.saved}
+							/>
 						{/if}
 					</div>
 				{/each}

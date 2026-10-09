@@ -164,7 +164,7 @@
 							<p class="mt-1.5 flex items-center gap-1.5 text-xs text-success"><CircleCheck class="size-3.5" />Connected — {arcaneEnvs} environment{arcaneEnvs === 1 ? '' : 's'}.</p>
 						{:else}
 							<p class="mt-1 text-xs text-muted-foreground">
-								Finds Postgres in every container and project across Arcane's hosts. Read-only key permissions:
+								Finds Postgres, MySQL and MariaDB in every container and project across Arcane's hosts. Read-only key permissions:
 								<code class="font-mono">environments:list</code>, <code class="font-mono">projects:list</code>, <code class="font-mono">projects:read</code>,
 								<code class="font-mono">containers:list</code>, <code class="font-mono">containers:read</code>.
 							</p>

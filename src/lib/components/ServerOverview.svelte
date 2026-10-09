@@ -2,12 +2,16 @@
 	import { Activity, Clock, Database, Gauge, HardDrive, LoaderCircle, Puzzle, ShieldCheck, Table2, User } from '@lucide/svelte';
 	import { api, errorMessage } from '#lib/client/api.ts';
 	import { ago, bytes, compact } from '#lib/client/format.ts';
+	import { engineLabel } from '#lib/engine.ts';
+	import type { Engine, Flavor } from '#lib/types.ts';
 
 	type Overview = {
+		engine: Engine;
+		flavor: Flavor;
 		version: string;
 		serverVersion: string;
 		databaseBytes: number;
-		startedAt: string;
+		startedAt: string | null;
 		currentUser: string;
 		superuser: boolean;
 		canCreate: boolean;
@@ -17,6 +21,11 @@
 		largestTables: { schema: string; name: string; sizeBytes: number; estimatedRows: number }[];
 		extensions: { name: string; version: string }[];
 		activity: { state: string; count: number }[];
+		/** MySQL / MariaDB only. */
+		database?: string | null;
+		grants?: string[];
+		canWrite?: boolean;
+		serverReadOnly?: boolean;
 	};
 
 	let { connectionId, readOnly, onopen }: { connectionId: string; readOnly: boolean; onopen: (schema: string, table: string) => void } = $props();
@@ -34,6 +43,13 @@
 
 	const sessions = $derived(data?.activity.reduce((n, a) => n + a.count, 0) ?? 0);
 	const maxTable = $derived(Math.max(1, ...(data?.largestTables.map((t) => t.sizeBytes) ?? [1])));
+	const mysql = $derived(data?.engine === 'mysql');
+	const product = $derived(data ? (data.engine === 'postgres' ? 'PostgreSQL' : engineLabel(data.engine, data.flavor)) : '');
+	const serverSub = $derived(
+		!data ? '' : mysql ? (data.serverReadOnly ? 'read_only server' : data.database ? `database ${data.database}` : 'no default database') : data.inRecovery ? 'replica (in recovery)' : 'primary'
+	);
+	/** An account that can change data, browsing through a read-only connection. */
+	const powerful = $derived(!!data && (data.superuser || (mysql && !!data.canWrite)));
 </script>
 
 <div class="h-full overflow-y-auto">
@@ -47,7 +63,7 @@
 	{:else}
 		<div class="space-y-5 p-5">
 			<div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
-				{#each [{ icon: Database, label: 'PostgreSQL', value: data.serverVersion, sub: data.inRecovery ? 'replica (in recovery)' : 'primary' }, { icon: HardDrive, label: 'Database size', value: bytes(data.databaseBytes), sub: `${data.largestTables.length ? compact(data.largestTables.reduce((n, t) => n + t.estimatedRows, 0)) : 0} rows in top tables` }, { icon: Activity, label: 'Sessions', value: `${sessions}`, sub: `of ${data.maxConnections} max` }, { icon: Gauge, label: 'Cache hit', value: data.cacheHitRatio != null ? `${data.cacheHitRatio}%` : '—', sub: 'buffer cache' }] as s (s.label)}
+				{#each [{ icon: Database, label: product, value: data.serverVersion, sub: serverSub }, { icon: HardDrive, label: 'Database size', value: bytes(data.databaseBytes), sub: `${data.largestTables.length ? compact(data.largestTables.reduce((n, t) => n + t.estimatedRows, 0)) : 0} rows in top tables` }, { icon: Activity, label: mysql ? 'Connections' : 'Sessions', value: `${sessions}`, sub: `of ${data.maxConnections} max` }, { icon: Gauge, label: 'Cache hit', value: data.cacheHitRatio != null ? `${data.cacheHitRatio}%` : '—', sub: mysql ? 'InnoDB buffer pool' : 'buffer cache' }] as s (s.label)}
 					<div class="card p-4">
 						<div class="flex items-center gap-2 text-xs text-muted-foreground"><s.icon class="size-3.5 text-primary" />{s.label}</div>
 						<p class="mt-2 text-xl font-semibold tracking-tight tabular-nums">{s.value}</p>
@@ -79,12 +95,30 @@
 					<section class="card p-4">
 						<h3 class="mb-3 flex items-center gap-2 text-[13px] font-semibold"><ShieldCheck class="size-4 text-primary" />Access</h3>
 						<dl class="space-y-2 text-[13px]">
-							<div class="flex items-center justify-between"><dt class="flex items-center gap-2 text-muted-foreground"><User class="size-3.5" />Role</dt><dd class="font-mono text-xs">{data.currentUser}</dd></div>
-							<div class="flex items-center justify-between"><dt class="text-muted-foreground">Superuser</dt><dd>{#if data.superuser}<span class="badge badge-warning">yes</span>{:else}<span class="badge">no</span>{/if}</dd></div>
+							<div class="flex items-center justify-between"><dt class="flex items-center gap-2 text-muted-foreground"><User class="size-3.5" />{mysql ? 'Account' : 'Role'}</dt><dd class="font-mono text-xs">{data.currentUser}</dd></div>
+							<div class="flex items-center justify-between"><dt class="text-muted-foreground">{mysql ? 'Global admin (ALL / SUPER)' : 'Superuser'}</dt><dd>{#if data.superuser}<span class="badge badge-warning">yes</span>{:else}<span class="badge">no</span>{/if}</dd></div>
+							{#if mysql}
+								<div class="flex items-center justify-between"><dt class="text-muted-foreground">Account can change data</dt><dd>{#if data.canWrite}<span class="badge badge-warning">yes</span>{:else}<span class="badge badge-success">no — SELECT only</span>{/if}</dd></div>
+							{/if}
 							<div class="flex items-center justify-between"><dt class="text-muted-foreground">pg·modern mode</dt><dd>{#if readOnly}<span class="badge badge-primary">read-only</span>{:else}<span class="badge badge-warning">read/write</span>{/if}</dd></div>
 							<div class="flex items-center justify-between"><dt class="flex items-center gap-2 text-muted-foreground"><Clock class="size-3.5" />Server up since</dt><dd class="text-xs">{ago(data.startedAt)}</dd></div>
 						</dl>
-						{#if data.superuser && readOnly}
+						{#if mysql && data.grants?.length}
+							<details class="mt-3 text-[11px]">
+								<summary class="cursor-pointer text-muted-foreground select-none hover:text-foreground">Grants ({data.grants.length})</summary>
+								<ul class="mt-1.5 space-y-1">
+									{#each data.grants as g, i (i)}
+										<li class="rounded-md bg-surface px-2 py-1 font-mono break-all text-muted-foreground">{g}</li>
+									{/each}
+								</ul>
+							</details>
+						{/if}
+						{#if powerful && readOnly && mysql}
+							<p class="mt-3 rounded-lg bg-surface p-2.5 text-[11px] text-muted-foreground">
+								Tip: this account {data.superuser ? 'is a global admin' : 'can change data'}. pg·modern only lets reads through on read-only connections, but
+								an account with just <code class="font-mono">SELECT, SHOW VIEW</code> on the databases you browse is the strongest guarantee.
+							</p>
+						{:else if data.superuser && readOnly}
 							<p class="mt-3 rounded-lg bg-surface p-2.5 text-[11px] text-muted-foreground">
 								Tip: this role is a superuser. pg·modern enforces read-only transactions, but a dedicated role with only
 								<code class="font-mono">pg_read_all_data</code> is the strongest guarantee.
@@ -93,10 +127,10 @@
 					</section>
 
 					<section class="card p-4">
-						<h3 class="mb-3 flex items-center gap-2 text-[13px] font-semibold"><Puzzle class="size-4 text-primary" />Extensions</h3>
+						<h3 class="mb-3 flex items-center gap-2 text-[13px] font-semibold"><Puzzle class="size-4 text-primary" />{mysql ? 'Storage engines' : 'Extensions'}</h3>
 						<div class="flex flex-wrap gap-1.5">
 							{#each data.extensions as e (e.name)}
-								<span class="badge font-mono">{e.name} <span class="opacity-60">{e.version}</span></span>
+								<span class="badge font-mono {mysql && e.version === 'default' ? 'badge-primary' : ''}">{e.name} <span class="opacity-60">{e.version}</span></span>
 							{/each}
 						</div>
 					</section>

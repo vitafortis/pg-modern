@@ -12,7 +12,7 @@
 	import { api, ApiError, errorMessage } from '#lib/client/api.ts';
 	import { ago, csv, download, duration, int } from '#lib/client/format.ts';
 	import { splitRanges } from '#lib/sql-split.ts';
-	import type { HistoryEntry, QueryError, QueryResult, SavedQuery } from '#lib/types.ts';
+	import type { Engine, Flavor, HistoryEntry, QueryError, QueryResult, SavedQuery } from '#lib/types.ts';
 	import { confirmAction, session } from '#lib/client/state.svelte.ts';
 	import { loadSaved, saved as savedStore } from '#lib/client/saved.svelte.ts';
 
@@ -24,6 +24,9 @@
 	let {
 		connectionId,
 		readOnly,
+		engine = 'postgres',
+		flavor = null,
+		defaultSchema = 'public',
 		sql = $bindable(''),
 		completion,
 		connectionName = '',
@@ -31,6 +34,10 @@
 	}: {
 		connectionId: string;
 		readOnly: boolean;
+		engine?: Engine;
+		flavor?: Flavor | null;
+		/** Unqualified table names in the editor complete from this schema. */
+		defaultSchema?: string;
 		sql: string;
 		completion: Record<string, Record<string, string[]>>;
 		connectionName?: string;
@@ -50,7 +57,8 @@
 	let pending = $state<string | null>(null);
 	let split = $state(42);
 
-	type PlanOutcome = { plan: unknown; analyzed: boolean; executedWrite: boolean; readOnly: boolean };
+	/** Postgres returns EXPLAIN's JSON; MySQL/MariaDB a text (or JSON text) plan with `format: 'text'`. */
+	type PlanOutcome = { plan: unknown; analyzed: boolean; executedWrite: boolean; readOnly: boolean; format?: 'text' };
 	let planResult = $state<PlanOutcome | null>(null);
 	let planError = $state<(QueryError & { sql: string; statementIndex: number }) | null>(null);
 	/** Which result area is showing: the query results or the EXPLAIN plan. */
@@ -65,13 +73,16 @@
 
 	const DESTRUCTIVE = /^\s*(drop|truncate)\b|^\s*(delete|update)\b(?![\s\S]*\bwhere\b)/i;
 
+	const mysql = $derived(engine === 'mysql');
+
 	function stripComments(s: string) {
-		return s.replace(/--[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+		const out = s.replace(/--[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+		return mysql ? out.replace(/#[^\n]*/g, '') : out;
 	}
 
 	function run(text: string) {
 		if (!text.trim() || running) return;
-		if (!readOnly && splitRanges(text).some((r) => DESTRUCTIVE.test(stripComments(r.text)))) {
+		if (!readOnly && splitRanges(text, engine).some((r) => DESTRUCTIVE.test(stripComments(r.text)))) {
 			pending = text;
 			return;
 		}
@@ -102,8 +113,9 @@
 		}
 	}
 
-	/** Statements EXPLAIN ANALYZE would really execute (mirrors the server's `modifiesData`). */
+	/** Statements EXPLAIN ANALYZE would really execute (mirrors the server's `modifiesData`; MySQL only analyzes reads). */
 	function modifiesData(text: string) {
+		if (mysql) return false;
 		const s = stripComments(text).trim().toLowerCase();
 		if (!/^(select|values|table|with|\()/.test(s)) return true;
 		return /\b(insert|update|delete|merge)\b/.test(s) || /^select\b[^;]*?\binto\b/.test(s);
@@ -231,7 +243,7 @@
 							<Workflow class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
 							<span class="min-w-0 flex-1">
 								<span class="block text-[13px] font-medium">Explain</span>
-								<span class="block text-[11px] text-muted-foreground">The planner’s estimates. Doesn’t run the query.</span>
+								<span class="block text-[11px] text-muted-foreground">{mysql ? 'The optimizer’s plan.' : 'The planner’s estimates.'} Doesn’t run the query.</span>
 							</span>
 						</button>
 						<button class="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-accent" role="menuitem" onclick={() => editor.explainCurrent(true)}>
@@ -239,7 +251,11 @@
 							<span class="min-w-0 flex-1">
 								<span class="flex items-center justify-between text-[13px] font-medium">Explain analyze <span class="kbd">⌥⌘↵</span></span>
 								<span class="block text-[11px] text-muted-foreground">
-									Runs it for real timings, then rolls back.{#if !readOnly}<span class="text-warning"> Writes are executed and undone — sequences and other side effects stay.</span>{/if}
+									{#if mysql}
+										Runs the query for real timings ({flavor === 'mariadb' ? 'ANALYZE FORMAT=JSON' : 'EXPLAIN ANALYZE, MySQL 8.0.18+'}). Reads only.
+									{:else}
+										Runs it for real timings, then rolls back.{#if !readOnly}<span class="text-warning"> Writes are executed and undone — sequences and other side effects stay.</span>{/if}
+									{/if}
 								</span>
 							</span>
 						</button>
@@ -264,7 +280,7 @@
 	<div class="flex min-h-0 flex-1">
 		<div class="flex min-w-0 flex-1 flex-col">
 			<div style="height:{split}%" class="min-h-0 bg-surface">
-				<SqlEditor bind:this={editor} bind:value={sql} schema={completion} onrun={run} onsave={openSave} onexplain={explain} />
+				<SqlEditor bind:this={editor} bind:value={sql} schema={completion} {engine} {flavor} {defaultSchema} onrun={run} onsave={openSave} onexplain={explain} />
 			</div>
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<div class="h-1 shrink-0 cursor-row-resize border-y border-border bg-surface hover:bg-primary/40" onpointerdown={resizeSplit}></div>
@@ -308,7 +324,15 @@
 					{/if}
 
 					{#if view === 'plan' && (planResult || planError)}
-						{#if planResult}
+						{#if planResult?.format === 'text'}
+							<div class="min-h-0 flex-1 overflow-auto">
+								<div class="flex items-center gap-2 border-b border-border px-3 py-1.5 text-[11px] text-muted-foreground">
+									<Workflow class="size-3.5" />{planResult.analyzed ? 'Measured plan' : 'Estimated plan'}
+									<span class="flex items-center gap-1"><Lock class="size-3" />read-only</span>
+								</div>
+								<pre class="p-4 font-mono text-[12px] leading-relaxed whitespace-pre">{String(planResult.plan)}</pre>
+							</div>
+						{:else if planResult}
 							<div class="min-h-0 flex-1"><PlanView plan={planResult.plan} executedWrite={planResult.executedWrite} readOnly={planResult.readOnly} /></div>
 						{:else if planError}
 							{@render queryError(planError, false)}
@@ -357,6 +381,7 @@
 					<div class="grid flex-1 place-items-center text-center text-xs text-muted-foreground">
 						<div>
 							<p>Run a query to see results.</p>
+							{#if mysql}<p class="mt-1">{readOnly ? 'Read-only: SELECT, SHOW, DESCRIBE and EXPLAIN run here.' : 'Statements run one at a time; DELIMITER blocks are supported.'}</p>{/if}
 							<p class="mt-2"><span class="kbd">⌘↵</span> statement · <span class="kbd">⇧⌘↵</span> everything · <span class="kbd">⌥⌘↵</span> explain analyze · <span class="kbd">⌘S</span> save · <span class="kbd">⌃Space</span> complete</p>
 						</div>
 					</div>
@@ -411,7 +436,9 @@
 			<div class="min-w-0 flex-1">
 				<p class="text-[13px] font-medium">{e.message}</p>
 				<p class="mt-1 font-mono text-[11px] text-muted-foreground">
-					{[e.code && `SQLSTATE ${e.code}`, showStatement && `statement ${e.statementIndex + 1}`, loc && `line ${loc.line}, col ${loc.col}`].filter(Boolean).join(' · ')}
+					{[e.sqlState ? `SQLSTATE ${e.sqlState}` : e.code && `SQLSTATE ${e.code}`, e.sqlState && e.code, showStatement && `statement ${e.statementIndex + 1}`, loc && `line ${loc.line}, col ${loc.col}`]
+						.filter(Boolean)
+						.join(' · ')}
 				</p>
 				{#if loc}
 					<pre class="mt-2 overflow-x-auto rounded-md bg-background/60 p-2 font-mono text-[11px]">{loc.text}

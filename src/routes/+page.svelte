@@ -18,22 +18,26 @@
 	import PageHeader from '#lib/components/PageHeader.svelte';
 	import AccessBadge from '#lib/components/AccessBadge.svelte';
 	import SourceBadge from '#lib/components/SourceBadge.svelte';
+	import EngineBadge from '#lib/components/EngineBadge.svelte';
 	import { api } from '#lib/client/api.ts';
 	import { ago, COLORS } from '#lib/client/format.ts';
 	import { connections, editor, isAdmin } from '#lib/client/state.svelte.ts';
-	import type { QueryError } from '#lib/types.ts';
+	import type { Flavor, QueryError } from '#lib/types.ts';
 
-	type Status = { state: 'checking' } | { state: 'up'; latencyMs: number; version: string } | { state: 'down'; error: string; hint?: string };
+	type Status =
+		| { state: 'checking' }
+		| { state: 'up'; latencyMs: number; version: string; flavor: Flavor }
+		| { state: 'down'; error: string; hint?: string };
 	let status = $state<Record<string, Status>>({});
 
 	async function check(id: string) {
 		status[id] = { state: 'checking' };
 		try {
-			const r = await api.post<{ ok: true; version: string; latencyMs: number } | { ok: false; error: QueryError }>(
+			const r = await api.post<{ ok: true; version: string; serverVersion: string; flavor: Flavor; latencyMs: number } | { ok: false; error: QueryError }>(
 				`/api/connections/${id}/test`
 			);
 			status[id] = r.ok
-				? { state: 'up', latencyMs: r.latencyMs, version: /PostgreSQL ([\d.]+)/.exec(r.version)?.[1] ?? '' }
+				? { state: 'up', latencyMs: r.latencyMs, version: r.serverVersion, flavor: r.flavor }
 				: { state: 'down', error: r.error.message, hint: r.error.hint };
 		} catch (err) {
 			status[id] = { state: 'down', error: String(err) };
@@ -62,7 +66,7 @@
 <svelte:head><title>Overview · pg·modern</title></svelte:head>
 
 <div class="h-full overflow-y-auto">
-	<PageHeader title="Overview" description="Every Postgres in your homelab, in one place.">
+	<PageHeader title="Overview" description="Every database in your homelab — Postgres, MySQL and MariaDB — in one place.">
 		{#snippet actions()}
 			<button class="btn btn-secondary" onclick={checkAll}><RefreshCw />Check all</button>
 			{#if isAdmin()}
@@ -94,8 +98,8 @@
 					<div class="mx-auto grid size-12 place-items-center rounded-xl bg-primary-soft text-primary"><Database class="size-6" /></div>
 					<h2 class="mt-4 text-lg font-semibold tracking-tight">No connections yet</h2>
 					<p class="mt-1.5 text-sm text-muted-foreground">
-						Scan your Docker hosts and project folders for Postgres credentials, or add a connection by hand. New
-						connections are read-only by default.
+						Scan your Docker hosts and project folders for Postgres, MySQL and MariaDB credentials, or add a connection
+						by hand. New connections are read-only by default.
 					</p>
 					{#if isAdmin()}
 						<div class="mt-6 flex justify-center gap-2">
@@ -136,10 +140,10 @@
 								</div>
 							</div>
 							<div class="mt-4 flex flex-wrap items-center gap-1.5">
+								<EngineBadge engine={c.engine} flavor={s?.state === 'up' ? s.flavor : c.flavor} version={s?.state === 'up' ? s.version : undefined} />
 								<AccessBadge readOnly={c.access?.readOnly ?? true} unlocked={!!c.access?.unlockedUntil} />
 								<SourceBadge source={c.source} />
 								{#if s?.state === 'up'}
-									<span class="badge font-mono">pg {s.version}</span>
 									<span class="badge font-mono">{s.latencyMs} ms</span>
 								{/if}
 							</div>

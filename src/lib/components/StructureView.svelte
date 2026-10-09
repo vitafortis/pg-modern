@@ -12,9 +12,11 @@
 		indexBytes: number | null;
 		comment: string | null;
 		owner: string;
+		/** MySQL / MariaDB: InnoDB, MyISAM, … */
+		storageEngine?: string | null;
 		viewDefinition: string | null;
 		columns: ColumnInfo[];
-		indexes: { name: string; def: string; primary: boolean; unique: boolean; size: number }[];
+		indexes: { name: string; def: string; primary: boolean; unique: boolean; size: number | null }[];
 		constraints: { name: string; type: string; def: string }[];
 		referencedBy: { name: string; from_schema: string; from_table: string; def: string }[];
 		triggers: { name: string; def: string; enabled: boolean }[];
@@ -42,7 +44,7 @@
 	{:else}
 		<div class="space-y-6 p-5">
 			<div class="grid grid-cols-2 gap-3 lg:grid-cols-5">
-				{#each [['Kind', data.kind], ['Rows (est.)', int(data.estimatedRows)], ['Total size', bytes(data.totalBytes)], ['Indexes', bytes(data.indexBytes)], ['Owner', data.owner]] as [k, v] (k)}
+				{#each [['Kind', data.kind], ['Rows (est.)', int(data.estimatedRows)], ['Total size', bytes(data.totalBytes)], ['Indexes', bytes(data.indexBytes)], data.storageEngine !== undefined ? (data.kind === 'view' ? ['Definer', data.owner || '—'] : ['Engine', data.storageEngine ?? '—']) : ['Owner', data.owner]] as [k, v] (k)}
 					<div class="card px-3 py-2.5">
 						<p class="text-[11px] text-muted-foreground">{k}</p>
 						<p class="mt-0.5 truncate text-sm font-medium">{v}</p>

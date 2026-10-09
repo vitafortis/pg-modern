@@ -42,7 +42,7 @@
 	let height = $state(600);
 	let widths = $state<number[]>([]);
 
-	const NUMERIC = /^(smallint|integer|bigint|int\d?|numeric|decimal|real|double precision|float\d?|oid|money)/;
+	const NUMERIC = /^(smallint|integer|bigint|tinyint|mediumint|int\d?|numeric|decimal|real|double( precision)?|float\d?|oid|money|year)/;
 	const isNumeric = (type: string) => NUMERIC.test(type);
 
 	// Size columns from the header and a sample of values; users can drag to resize.

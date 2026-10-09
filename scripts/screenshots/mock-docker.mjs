@@ -51,6 +51,31 @@ export function startMockDocker({ port, dbPort, user, password }) {
 			}, 'running', 'Up 5 days', false),
 			networks: { database: { IPAddress: '172.22.0.3', Aliases: ['postgres'] }, scanopy_default: { IPAddress: '172.31.0.3', Aliases: ['postgres'] } }
 		},
+		// MariaDB for Nextcloud, on the stack's own network only.
+		{
+			id: '1b2c3d4e5f6a',
+			name: 'nextcloud-db-1',
+			image: 'mariadb:11.4',
+			state: 'running',
+			status: 'Up 3 weeks',
+			project: 'nextcloud',
+			service: 'db',
+			env: { MARIADB_ROOT_PASSWORD: password, MARIADB_DATABASE: 'nextcloud', MARIADB_USER: 'nextcloud', MARIADB_PASSWORD: password },
+			ports: {},
+			networks: { nextcloud_default: { IPAddress: '172.31.40.2', Aliases: ['db'] } }
+		},
+		{
+			id: '2c3d4e5f6a1b',
+			name: 'nextcloud-app-1',
+			image: 'nextcloud:29-apache',
+			state: 'running',
+			status: 'Up 3 weeks',
+			project: 'nextcloud',
+			service: 'app',
+			env: { MYSQL_HOST: 'db', MYSQL_DATABASE: 'nextcloud', MYSQL_USER: 'nextcloud', MYSQL_PASSWORD: password, REDIS_HOST: 'redis' },
+			ports: {},
+			networks: { nextcloud_default: { IPAddress: '172.31.40.3', Aliases: ['app'] } }
+		},
 		{
 			id: '0a1b2c3d4e5f',
 			name: 'pg-modern',

@@ -26,6 +26,7 @@
 	import Toaster from '#lib/components/Toaster.svelte';
 	import ConnectionDialog from '#lib/components/ConnectionDialog.svelte';
 	import ConfirmHost from '#lib/components/ConfirmHost.svelte';
+	import EngineBadge from '#lib/components/EngineBadge.svelte';
 	import { api } from '#lib/client/api.ts';
 	import { COLORS } from '#lib/client/format.ts';
 	import { connections, editor, isAdmin, session, setTheme, theme } from '#lib/client/state.svelte.ts';
@@ -47,6 +48,8 @@
 	let filter = $state('');
 	let collapsed = $state(false);
 	const bare = $derived(page.url.pathname === '/login' || page.url.pathname === '/setup' || data.needsProfile);
+	// Engine tags only add information when there's more than one engine in the list.
+	const mixedEngines = $derived(new Set(connections.list.map((c) => c.engine)).size > 1);
 	const filtered = $derived(
 		connections.list.filter((c) =>
 			`${c.name} ${c.host} ${c.database}`.toLowerCase().includes(filter.toLowerCase())
@@ -151,6 +154,7 @@
 							<span class="size-2 shrink-0 rounded-full" style="background:{COLORS[c.color] ?? COLORS.violet}; box-shadow: 0 0 8px {COLORS[c.color] ?? COLORS.violet}"></span>
 							{#if !collapsed}
 								<span class="min-w-0 flex-1 truncate">{c.name}</span>
+								{#if mixedEngines}<span class="opacity-75"><EngineBadge engine={c.engine} flavor={c.flavor} variant="tag" /></span>{/if}
 								<span class={isAdmin() ? 'group-focus-within:hidden group-hover:hidden' : ''}>
 									{#if c.access?.readOnly ?? true}
 										<Lock class="size-3 shrink-0 opacity-40" />

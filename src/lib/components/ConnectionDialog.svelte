@@ -7,9 +7,11 @@
 	import { api, errorMessage } from '#lib/client/api.ts';
 	import { COLORS } from '#lib/client/format.ts';
 	import { editor, refreshConnections, toast } from '#lib/client/state.svelte.ts';
-	import type { Connection, QueryError, SslMode } from '#lib/types.ts';
+	import { DEFAULT_PORT, engineLabel } from '#lib/engine.ts';
+	import type { Connection, Engine, Flavor, QueryError, SslMode } from '#lib/types.ts';
 
 	type Form = {
+		engine: Engine;
 		name: string;
 		host: string;
 		port: number;
@@ -22,6 +24,7 @@
 	};
 
 	const blank = (): Form => ({
+		engine: 'postgres',
 		name: '',
 		host: '',
 		port: 5432,
@@ -38,7 +41,7 @@
 	let changePassword = $state(false);
 	let saving = $state(false);
 	let testing = $state(false);
-	let test = $state<{ ok: true; version: string; latencyMs: number } | { ok: false; error: QueryError } | null>(null);
+	let test = $state<{ ok: true; version: string; latencyMs: number; engine: Engine; flavor: Flavor } | { ok: false; error: QueryError } | null>(null);
 	let confirmDelete = $state(false);
 
 	const editing = $derived(editor.target && editor.target !== 'new' ? editor.target : null);
@@ -53,34 +56,66 @@
 			form = blank();
 			changePassword = true;
 		} else if (t) {
-			form = { ...t, password: '' };
+			form = {
+				engine: t.engine,
+				name: t.name,
+				host: t.host,
+				port: t.port,
+				database: t.database,
+				user: t.user,
+				password: '',
+				sslMode: t.sslMode,
+				readOnly: t.readOnly,
+				color: t.color
+			};
 			changePassword = !t.hasPassword;
 		}
 	});
 
-	/** Paste a postgres:// URL to fill the form. */
+	/** Switching engines swaps the defaults that belong to the other one. */
+	function setEngine(engine: Engine) {
+		if (engine === form.engine) return;
+		const other = form.engine;
+		if (form.port === DEFAULT_PORT[other]) form.port = DEFAULT_PORT[engine];
+		if (engine === 'mysql') {
+			if (form.database === 'postgres') form.database = '';
+			if (form.user === 'postgres') form.user = 'root';
+		} else {
+			if (!form.database) form.database = 'postgres';
+			if (form.user === 'root') form.user = 'postgres';
+		}
+		form.engine = engine;
+		test = null;
+	}
+
+	/** Paste a postgres://, mysql:// or mariadb:// URL to fill the form. */
 	function applyUrl() {
 		try {
-			const u = new URL(url.trim().replace(/^postgres(ql)?:/i, 'http:'));
+			const raw = url.trim().replace(/^jdbc:/i, '');
+			const engine: Engine = /^(mysql|mariadb)/i.test(raw) ? 'mysql' : 'postgres';
+			setEngine(engine);
+			const u = new URL(raw.replace(/^[a-z][\w+]*:/i, 'http:'));
 			form.host = u.hostname;
-			form.port = Number(u.port) || 5432;
+			form.port = Number(u.port) || DEFAULT_PORT[engine];
 			form.user = decodeURIComponent(u.username) || form.user;
 			form.password = decodeURIComponent(u.password);
 			form.database = decodeURIComponent(u.pathname.slice(1)) || form.database;
-			const ssl = u.searchParams.get('sslmode');
-			if (ssl === 'disable' || ssl === 'require' || ssl === 'verify-full') form.sslMode = ssl;
-			if (!form.name) form.name = `${form.database} @ ${form.host}`;
+			const ssl = (u.searchParams.get('sslmode') ?? u.searchParams.get('ssl-mode') ?? '').toLowerCase();
+			if (ssl === 'disable' || ssl === 'disabled') form.sslMode = 'disable';
+			else if (ssl === 'require' || ssl === 'required') form.sslMode = 'require';
+			else if (ssl === 'verify-full' || ssl === 'verify_identity') form.sslMode = 'verify-full';
+			if (!form.name) form.name = `${form.database || form.user} @ ${form.host}`;
 			changePassword = true;
 			url = '';
 		} catch {
-			toast('error', 'Not a valid postgres:// URL');
+			toast('error', 'Not a valid database URL', 'Use postgres://, mysql:// or mariadb://');
 		}
 	}
 
 	function payload() {
 		return {
 			...form,
-			name: form.name.trim() || `${form.database} @ ${form.host}`,
+			name: form.name.trim() || `${form.database || form.user} @ ${form.host}`,
 			password: changePassword ? form.password : undefined
 		};
 	}
@@ -127,9 +162,30 @@
 	width="max-w-xl"
 >
 	<form id="conn-form" onsubmit={save} class="space-y-4">
+		<div class="grid grid-cols-2 gap-1 rounded-xl border border-border bg-surface p-1" role="radiogroup" aria-label="Database engine">
+			{#each [{ value: 'postgres', label: 'PostgreSQL', sub: 'Postgres and its forks' }, { value: 'mysql', label: 'MySQL · MariaDB', sub: 'MySQL, MariaDB, Percona' }] as e (e.value)}
+				<button
+					type="button"
+					role="radio"
+					aria-checked={form.engine === e.value}
+					class="flex flex-col items-start rounded-lg px-3 py-1.5 text-left transition-colors {form.engine === e.value
+						? 'bg-card text-foreground shadow-surface'
+						: 'text-muted-foreground hover:text-foreground'}"
+					onclick={() => setEngine(e.value as Engine)}
+				>
+					<span class="text-[13px] font-medium">{e.label}</span>
+					<span class="text-[11px] opacity-70">{e.sub}</span>
+				</button>
+			{/each}
+		</div>
+
 		{#if !editing}
 			<div class="flex gap-2">
-				<input class="input font-mono text-xs" placeholder="Paste postgres://user:pass@host:5432/db" bind:value={url} />
+				<input
+					class="input font-mono text-xs"
+					placeholder={form.engine === 'mysql' ? 'Paste mysql://user:pass@host:3306/db' : 'Paste postgres://user:pass@host:5432/db'}
+					bind:value={url}
+				/>
 				<button type="button" class="btn btn-secondary h-9" disabled={!url} onclick={applyUrl}>Fill</button>
 			</div>
 		{/if}
@@ -168,8 +224,14 @@
 
 		<div class="grid grid-cols-2 gap-3">
 			<div>
-				<label class="label" for="c-db">Database</label>
-				<input id="c-db" class="input font-mono text-[13px]" required bind:value={form.database} />
+				<label class="label" for="c-db">{form.engine === 'mysql' ? 'Default database' : 'Database'}</label>
+				<input
+					id="c-db"
+					class="input font-mono text-[13px]"
+					required={form.engine === 'postgres'}
+					placeholder={form.engine === 'mysql' ? 'optional — all are listed' : ''}
+					bind:value={form.database}
+				/>
 			</div>
 			<div>
 				<label class="label" for="c-user">User</label>
@@ -210,7 +272,10 @@
 			<div class="flex-1">
 				<p class="text-[13px] font-medium">{form.readOnly ? 'Read-only' : 'Read/write'}</p>
 				<p class="mt-0.5 text-xs text-muted-foreground">
-					{#if form.readOnly}
+					{#if form.readOnly && form.engine === 'mysql'}
+						Only reads run (SELECT, SHOW, DESCRIBE, EXPLAIN), on a read-only session inside a <code class="font-mono">READ ONLY</code> transaction that is rolled
+						back afterwards. A user with only <code class="font-mono">SELECT</code> grants is still the strongest guarantee.
+					{:else if form.readOnly}
 						Every query runs inside a <code class="font-mono">READ ONLY</code> transaction that is rolled back afterwards. Transaction control is blocked.
 					{:else}
 						Statements run with the full privileges of <code class="font-mono">{form.user}</code>. Destructive statements still ask for confirmation.
@@ -229,7 +294,7 @@
 				{#if test.ok}
 					<CircleCheck class="size-4 shrink-0 text-success" />
 					<div>
-						<p class="font-medium text-foreground">Connected in {test.latencyMs} ms</p>
+						<p class="font-medium text-foreground">Connected to {engineLabel(test.engine, test.flavor)} in {test.latencyMs} ms</p>
 						<p class="mt-0.5 font-mono text-muted-foreground">{test.version}</p>
 					</div>
 				{:else}

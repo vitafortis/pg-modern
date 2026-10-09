@@ -5,19 +5,26 @@
 	import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 	import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete';
 	import { bracketMatching, HighlightStyle, indentOnInput, syntaxHighlighting } from '@codemirror/language';
-	import { sql, PostgreSQL } from '@codemirror/lang-sql';
+	import { sql, MariaSQL, MySQL, PostgreSQL } from '@codemirror/lang-sql';
 	import { tags as t } from '@lezer/highlight';
 	import { statementAt } from '#lib/sql-split.ts';
+	import type { Engine, Flavor } from '#lib/types.ts';
 
 	let {
 		value = $bindable(''),
 		schema = {},
+		engine = 'postgres',
+		flavor = null,
+		defaultSchema = 'public',
 		onrun,
 		onsave,
 		onexplain
 	}: {
 		value: string;
 		schema?: Record<string, Record<string, string[]>>;
+		engine?: Engine;
+		flavor?: Flavor | null;
+		defaultSchema?: string;
 		/** Called with the selection, the statement under the cursor, or (`all`) the whole buffer. */
 		onrun: (sql: string, scope: 'selection' | 'statement' | 'all') => void;
 		/** ⌘S / Ctrl+S. */
@@ -63,14 +70,15 @@
 		'.cm-completionDetail': { color: 'var(--muted-foreground)', fontStyle: 'normal', marginLeft: '8px' }
 	});
 
-	const sqlLang = (s: typeof schema) => sql({ dialect: PostgreSQL, schema: s, defaultSchema: 'public', upperCaseKeywords: false });
+	const sqlLang = (s: typeof schema, e: Engine, f: Flavor | null, d: string) =>
+		sql({ dialect: e === 'mysql' ? (f === 'mariadb' ? MariaSQL : MySQL) : PostgreSQL, schema: s, defaultSchema: d || undefined, upperCaseKeywords: false });
 
 	/** The selection, or else the statement under the cursor. */
 	function current(): { text: string; scope: 'selection' | 'statement' } | null {
 		const state = view.state;
 		const sel = state.selection.main;
 		if (!sel.empty) return { text: state.sliceDoc(sel.from, sel.to), scope: 'selection' };
-		const stmt = statementAt(state.doc.toString(), sel.head);
+		const stmt = statementAt(state.doc.toString(), sel.head, engine);
 		return stmt ? { text: stmt.text, scope: 'statement' } : null;
 	}
 
@@ -140,7 +148,7 @@
 						])
 					),
 					keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, ...completionKeymap, indentWithTab]),
-					language.of(sqlLang(schema)),
+					language.of(sqlLang(schema, engine, flavor, defaultSchema)),
 					syntaxHighlighting(highlight),
 					theme,
 					EditorView.updateListener.of((u) => {
@@ -153,8 +161,8 @@
 	});
 
 	$effect(() => {
-		const s = schema;
-		view?.dispatch({ effects: language.reconfigure(sqlLang(s)) });
+		const lang = sqlLang(schema, engine, flavor, defaultSchema);
+		view?.dispatch({ effects: language.reconfigure(lang) });
 	});
 
 	// Accept external value changes (e.g. loading from history).

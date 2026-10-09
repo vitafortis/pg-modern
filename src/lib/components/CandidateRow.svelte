@@ -2,6 +2,7 @@
 	import { CircleAlert, KeyRound, Check, RefreshCw, ArrowRight } from '@lucide/svelte';
 	import Switch from './Switch.svelte';
 	import NetworkPathView from './NetworkPathView.svelte';
+	import EngineBadge from './EngineBadge.svelte';
 	import type { Candidate } from '#lib/types.ts';
 
 	export interface Choice {
@@ -58,8 +59,9 @@
 
 	<div class="min-w-0">
 		<input class="input h-8 text-[13px] font-medium" bind:value={choice.name} />
-		<p class="mt-1.5 truncate font-mono text-[11px] text-muted-foreground" title="{candidate.user}@…/{candidate.database}">
-			{candidate.user} · {candidate.database}
+		<p class="mt-1.5 flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-muted-foreground" title="{candidate.user}@…/{candidate.database}">
+			<EngineBadge engine={candidate.engine ?? 'postgres'} flavor={candidate.flavor} />
+			<span class="truncate">{candidate.user} · {candidate.database || 'no default database'}</span>
 		</p>
 	</div>
 

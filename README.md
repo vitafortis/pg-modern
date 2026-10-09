@@ -5,7 +5,7 @@
 <h1 align="center">pg·modern</h1>
 
 <p align="center">
-  A modern, self-hosted Postgres console for the homelab.<br />
+  A modern, self-hosted database console for the homelab — Postgres, MySQL and MariaDB.<br />
   It finds your databases in Docker and <code>.env</code> files, keeps the credentials encrypted, and opens everything read-only.
 </p>
 
@@ -15,18 +15,19 @@
 
 ## Features
 
-- **Discover**: finds Postgres containers on your Docker hosts, connection strings in app containers, credentials in `.env`, `compose.yaml` and Terraform files, and every project managed by [Arcane](https://getarcane.app) through its API. Import them in one click.
+- **Postgres, MySQL and MariaDB**: one console for both protocols, so the databases behind Nextcloud, Ghost, BookStack, Firefly III, PhotoPrism or WordPress sit next to your Postgres ones. MariaDB is told apart from MySQL by its version string.
+- **Discover**: finds database containers on your Docker hosts, connection strings in app containers, credentials in `.env`, `compose.yaml` and Terraform files, and every project managed by [Arcane](https://getarcane.app) through its API. Import them in one click.
 - **Encrypted storage**: connection passwords are sealed with AES-256-GCM. Discovered secrets never reach the browser.
-- **Read-only by default**: every query runs in a `READ ONLY` transaction that is always rolled back. Writes are opt-in per connection or unlocked for a few minutes at a time, and destructive statements still ask first.
+- **Read-only by default**: every query runs in a `READ ONLY` transaction that is always rolled back (on MySQL/MariaDB only reads get through at all). Writes are opt-in per connection or unlocked for a few minutes at a time, and destructive statements still ask first.
 - **Access control and audit**: give viewers every connection or only selected ones, let specific people unlock writes temporarily, and see every query and change in the audit log.
 - **Browse**: schema tree; filter, sort, page and export tables; inspect JSON cells; view columns, indexes, constraints, foreign keys and triggers.
 - **Query**: SQL editor with schema-aware autocomplete. Run the statement under the cursor (`⌘↵`) or the whole script (`⇧⌘↵`), cancel long queries, keep a per-connection history, and export results to CSV or JSON.
 - **Saved queries**: name, describe and share queries per connection or for every connection; open them from the workspace header.
-- **EXPLAIN**: a visual plan tree with self time, misestimated row counts, buffers and the slowest node highlighted. `EXPLAIN ANALYZE` of a write runs inside a transaction that's rolled back.
-- **Server overview and activity**: version, size, cache hit ratio, extensions; live sessions with lock chains, waiting and idle-in-transaction sessions, database and table sizes, dead tuples and unused indexes. Cancel or terminate a session once writes are unlocked.
+- **EXPLAIN**: on Postgres, a visual plan tree with self time, misestimated row counts, buffers and the slowest node highlighted; `EXPLAIN ANALYZE` of a write runs inside a transaction that's rolled back. On MySQL the tree plan (`EXPLAIN ANALYZE` for reads on 8.0.18+), on MariaDB the JSON plan (`ANALYZE FORMAT=JSON` for reads).
+- **Server overview and activity**: version, size, cache hit ratio, extensions (storage engines and grants on MySQL); live sessions with lock chains, waiting and idle-in-transaction sessions, database and table sizes, dead tuples and unused indexes (Postgres) or the process list, InnoDB lock waits and index sizes (MySQL/MariaDB). Cancel or terminate a session (`KILL QUERY` / `KILL` on MySQL) once writes are unlocked.
 - **Backup & restore**: an encrypted, passphrase-protected file with connections, users and settings that restores on a fresh install.
 - **Users and SSO**: sign in with any OIDC provider (Authentik, Authelia, Keycloak, Pocket ID, Google, …). Accounts can be created automatically for matching emails. *Admins* manage everything; *viewers* browse and query read-only.
-- **Schema diagram**: an ER view of each schema built from its foreign keys.
+- **Schema diagram**: an ER view of each schema (each database, on MySQL) built from its foreign keys.
 - **Light and dark** themes, and multi-arch images (`amd64`, `arm64`).
 
 ## Getting started
@@ -42,7 +43,7 @@ docker compose up -d
 
 Open `http://<your-host>:3030`. A short setup wizard creates the admin account (name, email, password) and optionally connects Arcane and your stacks folders. Then go to **Discover**:
 
-1. **Containers** lists every Postgres it found through the Docker API. Use **Running only** and **Reachable only** to cut the noise.
+1. **Containers** lists every Postgres, MySQL and MariaDB server (and app credentials) it found through the Docker API. Use **Running only** and **Reachable only** to cut the noise.
 2. **Files** scans the mounted stacks folder. You can add more folders right there.
 3. Tick what you want, rename anything you like, and **Import**. New connections are read-only.
 
@@ -205,7 +206,8 @@ To build it yourself: `docker build -t pg-modern .`
 **Containers.** Every container on each Docker endpoint is inspected.
 
 - Postgres servers are recognized by image (`postgres`, `postgis`, `timescaledb`, `pgvector`, `bitnami/postgresql`, `immich-app/postgres`, …) or by `POSTGRES_PASSWORD` / `PGDATA` in their environment.
-- Credentials come from `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB`, plus the Bitnami equivalents. Passwords kept in `*_FILE` secrets are flagged so you can type them in.
+- MySQL and MariaDB servers by image (`mysql`, `mariadb`, `percona`, `mysql/mysql-server`, `linuxserver/mariadb`, `bitnami/mysql`, `bitnami/mariadb`, `yobasystems/alpine-mariadb`, …), by root-level variables only a server sets (`MYSQL_ROOT_PASSWORD`, `MARIADB_ROOT_PASSWORD`, `MYSQL_ALLOW_EMPTY_PASSWORD`, …) or an exposed `3306`. phpMyAdmin, Adminer, exporters, proxies and backup tools are skipped.
+- Credentials come from `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB`, plus the Bitnami equivalents; for MySQL/MariaDB both the app user (`MYSQL_USER` / `MARIADB_USER` with its password and database) and `root` (when a root password is set or allowed empty) are offered. Passwords kept in `*_FILE` secrets are flagged so you can type them in.
 - App containers are scanned for connection strings too. When an app points at a sibling container by service name, the candidate is rewritten to an address pg·modern can reach.
 
 **Arcane.** For each environment, every container is inspected through the API, with the same detection as local Docker. Each project's compose and `.env` content also goes through the same parser as files on disk. Results are merged per compose project.
@@ -214,11 +216,11 @@ To build it yourself: `docker build -t pg-modern .`
 
 - `node_modules`, `.git`, `.terraform`, `*.example` and similar are skipped.
 - From each file pg·modern picks up:
-  - `postgres://` URLs in any variable
-  - grouped keys like `DB_HOST` / `DB_USER` / `DB_PASSWORD`, `PGHOST` / `PGUSER`, `PAPERLESS_DBHOST`, and `POSTGRES_*`
+  - `postgres://`, `mysql://` and `mariadb://` URLs in any variable (`mysql+pymysql://` and `jdbc:` forms too)
+  - grouped keys like `DB_HOST` / `DB_USER` / `DB_PASSWORD`, `PGHOST` / `PGUSER`, `PAPERLESS_DBHOST`, `POSTGRES_*`, `MYSQL_*` / `MARIADB_*` (Nextcloud), `WORDPRESS_DB_*`, Ghost's `database__client=mysql` + `database__connection__*`, PhotoPrism's `PHOTOPRISM_DATABASE_DRIVER=mysql` + `…_SERVER=host:port`, and anything with a `DB_CONNECTION` / `*_DB_TYPE` / `*_DRIVER` naming its engine (Laravel apps like Firefly III and BookStack, Gitea, …). Without an explicit engine, port `3306` or the server container the app points at decides.
   - Compose services, with `${VAR:-default}` interpolation from the neighbouring `.env`
-  - Terraform modules (each folder read as a whole): the `postgresql` provider and its login roles, `docker_container` resources, and `postgres://` URLs in any attribute. `var.*` comes from `*.auto.tfvars`, `terraform.tfvars`, other `*.tfvars` and variable defaults; `local.*` from `locals`. A local `terraform.tfstate` adds computed values (generated passwords) plus RDS / Aurora Postgres instances. Values that can't be resolved are flagged on the candidate.
-- Groups that declare another engine (`DB_CONNECTION=mysql`) are ignored.
+  - Terraform modules (each folder read as a whole): the `postgresql` provider and its login roles, the `mysql` provider (`endpoint`, `username`, `password`), `docker_container` resources, and database URLs in any attribute. `var.*` comes from `*.auto.tfvars`, `terraform.tfvars`, other `*.tfvars` and variable defaults; `local.*` from `locals`. A local `terraform.tfstate` adds computed values (generated passwords) plus RDS / Aurora instances running Postgres, MySQL or MariaDB. Values that can't be resolved are flagged on the candidate.
+- Groups that declare an unsupported engine (`DB_CONNECTION=sqlite`, `database__client=sqlite3`) are ignored.
 
 Scan results stay on the server, and an import refers to them by key, so a discovered password goes straight into the encrypted store.
 
@@ -232,13 +234,21 @@ The file is encrypted with a passphrase you choose (12+ characters), not the mas
 
 - **Credentials** are sealed with AES-256-GCM, bound to their connection id. The SQLite file and key file are created with mode `0600`. Back up `secret.key`, or set `PGM_SECRET_KEY`. Without it, stored passwords can't be recovered.
 - **Backup files** hold decrypted connection passwords, API keys and the SSO client secret, re-encrypted with AES-256-GCM under a key derived from your passphrase (scrypt), not the master key. Treat the file and its passphrase like a password manager export. Only admins can export or restore, and both are recorded in the audit log.
-- **Read-only mode** is enforced in four layers:
+- **Read-only mode** on Postgres is enforced in four layers:
   1. The session sets `default_transaction_read_only=on`.
   2. Every request runs inside `BEGIN TRANSACTION READ ONLY … ROLLBACK`.
   3. Each statement goes through the extended protocol, so it can't smuggle in a `COMMIT`.
   4. Transaction and session control statements (`COMMIT`, `SET TRANSACTION`, `SET ROLE`, `RESET`, …) are rejected before they reach the server.
 
   For the strongest guarantee, also connect as a role that only has `pg_read_all_data`.
+- **Read-only mode on MySQL / MariaDB** has the same layers, plus an allowlist, because DDL commits implicitly and a read-only transaction doesn't stop everything (MariaDB, for one, still runs `SELECT … INTO OUTFILE`):
+  1. Read-only sessions set `transaction_read_only = ON` (`tx_read_only` on MariaDB < 11.1 and MySQL 5.7), in a pool separate from writable sessions.
+  2. Every request runs inside `START TRANSACTION READ ONLY … ROLLBACK`.
+  3. The driver sends one statement per call (`multipleStatements` off), so nothing can ride along behind a read.
+  4. Only reads reach the server: `SELECT` / `WITH` / `TABLE` / `VALUES`, `SHOW`, `DESCRIBE`, `EXPLAIN` of a read, `HELP` and `USE` (the default database is reset afterwards). `SELECT … INTO OUTFILE / DUMPFILE / @var`, locking reads (`FOR UPDATE`), `SET`, `LOCK`, `CALL`, `HANDLER`, `LOAD`, `DO`, transaction control and all DDL/DML are refused, including inside `/*! … */` executable comments.
+
+  For the strongest guarantee, connect as a user that only has `SELECT` (and `SHOW VIEW`) on the databases you browse; the overview warns when the account could change data. The `PROCESS` privilege lets the Activity tab see every connection and InnoDB lock waits.
+- **Postgres-only features**: the visual EXPLAIN tree (MySQL/MariaDB show the server's text or JSON plan instead, and `EXPLAIN ANALYZE` there is limited to reads), and dead tuple / vacuum / per-index scan statistics and extensions in the overview and Activity tab.
 - **Writes** need a read/write connection or a temporary unlock, which uses a separate session pool and expires on its own. `DROP`, `TRUNCATE`, and `DELETE` / `UPDATE` without a `WHERE` must be confirmed; the server enforces this, not just the UI.
 - **Access** is checked on the server for every connection-scoped page and API call; connections a viewer wasn't given don't exist as far as they can tell.
 - **Sign-in** is by OIDC or by local accounts (scrypt-hashed passwords, login throttle). Sessions are httpOnly cookies tied to a user. Cross-origin API writes are rejected. Viewers are forced read-only on the server, not just hidden from buttons in the UI.
@@ -254,4 +264,4 @@ pnpm screenshots                   # regenerate docs/screenshots (needs Docker)
 
 Requires Node 24+. The store uses the built-in `node:sqlite`, so there are no native modules. `pnpm screenshots` runs a seeded demo Postgres and a fake Docker API, so the images only ever show demo data.
 
-**Stack:** SvelteKit 3 · Svelte 5 · Tailwind CSS 4 · CodeMirror 6 · node-postgres. The look follows [Arcane](https://getarcane.app).
+**Stack:** SvelteKit 3 · Svelte 5 · Tailwind CSS 4 · CodeMirror 6 · node-postgres · mysql2. The look follows [Arcane](https://getarcane.app).
