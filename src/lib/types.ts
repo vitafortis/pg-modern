@@ -110,6 +110,41 @@ export interface SchemaTree {
 	schemas: { name: string; relations: RelationSummary[]; functions: number }[];
 }
 
+export interface DiagramColumn {
+	name: string;
+	type: string;
+	nullable: boolean;
+	isPrimaryKey: boolean;
+}
+
+export interface DiagramTable {
+	schema: string;
+	name: string;
+	kind: RelationSummary['kind'];
+	columns: DiagramColumn[];
+	/** Lives in another schema and is only shown because a foreign key points at it (key columns only). */
+	external?: boolean;
+}
+
+export interface DiagramForeignKey {
+	name: string;
+	fromSchema: string;
+	fromTable: string;
+	fromColumns: string[];
+	toSchema: string;
+	toTable: string;
+	toColumns: string[];
+}
+
+/** Tables and foreign keys of one schema, for the ER diagram. */
+export interface SchemaDiagram {
+	schema: string;
+	tables: DiagramTable[];
+	foreignKeys: DiagramForeignKey[];
+	/** More relations exist than were returned. */
+	truncated: boolean;
+}
+
 export interface QueryField {
 	name: string;
 	dataTypeID: number;
