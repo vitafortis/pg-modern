@@ -73,6 +73,8 @@ function db(): DatabaseSync {
 	`);
 	migrate(handle);
 	migrateSavedQueries(handle);
+	migrateSchemaSnapshots(handle);
+	migrateApiTokens(handle);
 	return handle;
 }
 
@@ -701,4 +703,59 @@ export function updateSavedQuery(id: string, input: SavedQueryInput): SavedQuery
 
 export function deleteSavedQuery(id: string): boolean {
 	return Number(db().prepare('DELETE FROM saved_queries WHERE id = ?').run(id).changes) > 0;
+}
+
+// --- schema snapshots (rows are read and written in schema-snapshots.ts) --------------
+
+function migrateSchemaSnapshots(h: DatabaseSync) {
+	h.exec(`
+		-- Normalized schema captures (gzip JSON), manual or taken when the schema changed.
+		CREATE TABLE IF NOT EXISTS schema_snapshots (
+			id TEXT PRIMARY KEY,
+			connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+			engine TEXT NOT NULL,
+			label TEXT NOT NULL,
+			note TEXT,
+			auto INTEGER NOT NULL DEFAULT 0,
+			hash TEXT NOT NULL,
+			size_bytes INTEGER NOT NULL,
+			stats TEXT NOT NULL,
+			data BLOB NOT NULL,
+			created_by TEXT,
+			created_by_email TEXT,
+			created_at TEXT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS schema_snapshots_conn ON schema_snapshots(connection_id, created_at DESC);
+
+		-- Per-connection auto-snapshot switch and the scheduled check's last outcome.
+		CREATE TABLE IF NOT EXISTS schema_snapshot_settings (
+			connection_id TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,
+			auto INTEGER NOT NULL DEFAULT 0,
+			last_checked_at TEXT,
+			last_error TEXT
+		);
+	`);
+}
+
+// --- API tokens (rows are read and written in api-tokens.ts) -------------------------
+
+function migrateApiTokens(h: DatabaseSync) {
+	h.exec(`
+		-- Read-only tokens for dashboards. Only a SHA-256 of the token is kept.
+		CREATE TABLE IF NOT EXISTS api_tokens (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			token_hash TEXT NOT NULL UNIQUE,
+			prefix TEXT NOT NULL,
+			scope TEXT NOT NULL DEFAULT 'status',
+			include_addresses INTEGER NOT NULL DEFAULT 0,
+			expires_at TEXT,
+			created_by TEXT,
+			created_by_email TEXT,
+			created_at TEXT NOT NULL,
+			last_used_at TEXT,
+			last_used_ip TEXT,
+			revoked_at TEXT
+		);
+	`);
 }
