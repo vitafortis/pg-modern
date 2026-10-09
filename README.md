@@ -21,7 +21,10 @@
 - **Access control and audit**: give viewers every connection or only selected ones, let specific people unlock writes temporarily, and see every query and change in the audit log.
 - **Browse**: schema tree; filter, sort, page and export tables; inspect JSON cells; view columns, indexes, constraints, foreign keys and triggers.
 - **Query**: SQL editor with schema-aware autocomplete. Run the statement under the cursor (`⌘↵`) or the whole script (`⇧⌘↵`), cancel long queries, keep a per-connection history, and export results to CSV or JSON.
-- **Server overview**: version, size, sessions, cache hit ratio, largest tables, extensions, and whether your role is a superuser.
+- **Saved queries**: name, describe and share queries per connection or for every connection; open them from the workspace header.
+- **EXPLAIN**: a visual plan tree with self time, misestimated row counts, buffers and the slowest node highlighted. `EXPLAIN ANALYZE` of a write runs inside a transaction that's rolled back.
+- **Server overview and activity**: version, size, cache hit ratio, extensions; live sessions with lock chains, waiting and idle-in-transaction sessions, database and table sizes, dead tuples and unused indexes. Cancel or terminate a session once writes are unlocked.
+- **Backup & restore**: an encrypted, passphrase-protected file with connections, users and settings that restores on a fresh install.
 - **Users and SSO**: sign in with any OIDC provider (Authentik, Authelia, Keycloak, Pocket ID, Google, …). Accounts can be created automatically for matching emails. *Admins* manage everything; *viewers* browse and query read-only.
 - **Schema diagram**: an ER view of each schema built from its foreign keys.
 - **Light and dark** themes, and multi-arch images (`amd64`, `arm64`).
