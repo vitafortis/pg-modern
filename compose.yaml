@@ -39,6 +39,9 @@ services:
       - pg-modern-data:/data
       # Where your stacks live. Read-only is all pg·modern needs.
       - /opt/stacks:/stacks:ro
+      # Database backups on a NAS: mount a share (see volumes below), then add a
+      # "Folder" destination at /backups under Backups → Destinations.
+      # - nas-backups:/backups
     extra_hosts:
       # Lets pg·modern reach database ports published on the Docker host.
       - host.docker.internal:host-gateway
@@ -61,6 +64,22 @@ services:
 
 volumes:
   pg-modern-data:
+  # NAS share for database backups, mounted by Docker itself (no mount on the host).
+  # The share must be writable by uid 1000 (the container's "node" user).
+  # NFS:
+  # nas-backups:
+  #   driver: local
+  #   driver_opts:
+  #     type: nfs
+  #     o: addr=nas.lan,rw,nfsvers=4
+  #     device: ":/volume1/backups/pg-modern"
+  # SMB / CIFS:
+  # nas-backups:
+  #   driver: local
+  #   driver_opts:
+  #     type: cifs
+  #     o: addr=nas.lan,username=backup,password=${NAS_PASSWORD},uid=1000,gid=1000,file_mode=0600,dir_mode=0700,vers=3.0
+  #     device: //nas.lan/backups/pg-modern
 
 # networks:
 #   immich_default:

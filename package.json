@@ -32,6 +32,7 @@
 		"@types/node": "^26.6.4",
 		"@types/pg": "^8.23.1",
 		"@types/pg-cursor": "^2.7.2",
+		"@types/ssh2-sftp-client": "^9.0.6",
 		"codemirror": "^6.0.2",
 		"playwright": "1",
 		"svelte": "^5.57.1",
@@ -45,14 +46,22 @@
 		"#lib/*": "./src/lib/*"
 	},
 	"dependencies": {
+		"aws4fetch": "^1.0.20",
 		"mysql2": "^3.24.5",
 		"openid-client": "^6.8.8",
 		"pg": "^8.23.1",
 		"pg-cursor": "^2.22.1",
+		"ssh2-sftp-client": "^12.1.1",
 		"yaml": "^2.9.1"
 	},
 	"packageManager": "pnpm@9.15.0",
 	"engines": {
 		"node": ">=24"
+	},
+	"pnpm": {
+		"neverBuiltDependencies": [
+			"ssh2",
+			"cpu-features"
+		]
 	}
 }

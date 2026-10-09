@@ -20,7 +20,8 @@
 		Plug,
 		Trash2,
 		ScrollText,
-		BellRing
+		BellRing,
+		DatabaseBackup
 	} from '@lucide/svelte';
 	import { removeConnection } from '#lib/client/connections.ts';
 	import Logo from '#lib/components/Logo.svelte';
@@ -67,6 +68,7 @@
 					{ href: '/users', label: 'Users', icon: Users },
 					{ href: '/audit', label: 'Audit log', icon: ScrollText },
 					{ href: '/alerts', label: 'Alerts', icon: BellRing },
+					{ href: '/backups', label: 'Backups', icon: DatabaseBackup },
 					{ href: '/settings', label: 'Settings', icon: Settings }
 				]
 			: [])

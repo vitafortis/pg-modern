@@ -7,3 +7,4 @@ import '../size-sampler.ts';
 
 export {};
 import './schema-snapshots.ts';
+import './backups.ts';
