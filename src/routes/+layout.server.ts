@@ -19,6 +19,7 @@ export const load: LayoutServerLoad = ({ locals, url }) => {
 	const connections = visibleConnections(user);
 	return {
 		auth: locals.auth,
+		version: __APP_VERSION__,
 		viewer,
 		needsProfile: !!user?.needsProfile,
 		connections,

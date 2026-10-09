@@ -224,6 +224,9 @@
 				>
 					{#if theme.value === 'dark'}<Sun />{:else}<Moon />{/if}
 				</button>
+				{#if !collapsed}
+					<span class="ml-1 truncate font-mono text-[11px] text-muted-foreground/70" title="pg·modern version">v{data.version}</span>
+				{/if}
 				{#if data.auth === 'authenticated'}
 					<button class="btn btn-ghost btn-icon btn-sm {collapsed ? '' : 'ml-auto'}" title="Sign out" onclick={logout}><LogOut /></button>
 				{/if}

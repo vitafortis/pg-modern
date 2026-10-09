@@ -1,6 +1,8 @@
 // See https://svelte.dev/docs/kit/types#app.d.ts
 // for information about these interfaces
 declare global {
+	/** The release version, e.g. 0.5.42 (set at build time). */
+	const __APP_VERSION__: string;
 	namespace App {
 		interface Error {
 			message: string;

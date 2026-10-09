@@ -8,6 +8,9 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml .npmrc ./
 RUN pnpm install --frozen-lockfile
 COPY . .
+# The release version shown in the sidebar (the image workflow passes it; local builds say -dev).
+ARG PGM_VERSION=
+ENV PGM_VERSION=$PGM_VERSION
 RUN pnpm build && pnpm prune --prod
 
 FROM node:24-alpine

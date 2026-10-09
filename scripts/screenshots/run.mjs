@@ -164,7 +164,7 @@ async function main() {
 	await page.waitForSelector('text=Indexes');
 	await shot('structure');
 
-	await page.keyboard.press('Meta+k');
+	await page.click('button:has-text("New query")');
 	await page.waitForSelector('.cm-content');
 	await page.locator('.cm-content').click();
 	await page.keyboard.insertText(
