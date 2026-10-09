@@ -14,6 +14,8 @@ declare global {
 			secure: boolean;
 			/** Client address, for the audit log. */
 			ip?: string;
+			/** Set only on /api/status routes, by a valid API token (never a session). */
+			apiToken?: import('#lib/server/api-tokens.ts').TokenPrincipal;
 		}
 	}
 }

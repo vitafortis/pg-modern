@@ -7,6 +7,7 @@ import { publicUrl } from '#lib/server/origin.ts';
 import { ADMIN_PAGES, adminOnlyApi, connectionIdFromPath } from '#lib/server/access.ts';
 import { canSee } from '#lib/server/permissions.ts';
 import { getConnection } from '#lib/server/store.ts';
+import { authorizeStatusRequest, isStatusRoute } from '#lib/server/api-tokens.ts';
 
 export const init: ServerInit = () => {
 	startJobs();
@@ -40,6 +41,26 @@ export const handle: Handle = async ({ event, resolve }) => {
 	const visible = publicUrl(event.url, event.request.headers);
 	event.locals.origin = visible.origin;
 	event.locals.secure = visible.protocol === 'https:';
+
+	// Dashboard status routes take an API token (Bearer or ?token=) and nothing else:
+	// no session, no cookies. Tokens are checked here only, so they open no other route.
+	if (isStatusRoute(pathname)) {
+		try {
+			event.locals.ip = event.getClientAddress();
+		} catch {}
+		event.locals.auth = 'anonymous';
+		event.locals.user = null;
+		const auth = authorizeStatusRequest({ method, path: pathname, headers: event.request.headers, url: event.url, ip: event.locals.ip });
+		if (!auth.ok) {
+			const headers: Record<string, string> = auth.status === 401 ? { 'www-authenticate': 'Bearer' } : auth.status === 405 ? { allow: 'GET, HEAD' } : {};
+			return json({ message: auth.message }, { status: auth.status, headers });
+		}
+		event.locals.apiToken = auth.principal;
+		const response = await resolve(event);
+		response.headers.set('X-Content-Type-Options', 'nosniff');
+		response.headers.set('Referrer-Policy', 'no-referrer');
+		return response;
+	}
 
 	const { state, user } = authenticate(event.cookies);
 	event.locals.auth = state;

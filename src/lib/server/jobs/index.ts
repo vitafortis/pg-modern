@@ -6,3 +6,4 @@ import '../alerts/job.ts';
 import '../size-sampler.ts';
 
 export {};
+import './schema-snapshots.ts';

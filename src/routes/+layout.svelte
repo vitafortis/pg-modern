@@ -28,6 +28,7 @@
 	import ConnectionDialog from '#lib/components/ConnectionDialog.svelte';
 	import ConfirmHost from '#lib/components/ConfirmHost.svelte';
 	import EngineBadge from '#lib/components/EngineBadge.svelte';
+	import CommandPalette from '#lib/components/CommandPalette.svelte';
 	import { api } from '#lib/client/api.ts';
 	import { COLORS } from '#lib/client/format.ts';
 	import { connections, editor, isAdmin, session, setTheme, theme } from '#lib/client/state.svelte.ts';
@@ -231,6 +232,8 @@
 		</main>
 	</div>
 	<ConnectionDialog />
+	<!-- ⌘K / Ctrl+K: search connections, tables, pages, saved queries and actions. -->
+	<CommandPalette signedIn={!!data.viewer} ontogglesidebar={() => (collapsed = !collapsed)} />
 {/if}
 
 <Toaster />
