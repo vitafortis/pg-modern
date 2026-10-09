@@ -3,6 +3,7 @@
 	import { api, errorMessage } from '#lib/client/api.ts';
 	import { ago, bytes, compact } from '#lib/client/format.ts';
 	import { engineLabel } from '#lib/engine.ts';
+	import GrowthPanel from './GrowthPanel.svelte';
 	import type { Engine, Flavor } from '#lib/types.ts';
 
 	type Overview = {
@@ -71,6 +72,8 @@
 					</div>
 				{/each}
 			</div>
+
+			<GrowthPanel {connectionId} {onopen} />
 
 			<div class="grid gap-5 xl:grid-cols-[1.4fr_1fr]">
 				<section class="card p-4">

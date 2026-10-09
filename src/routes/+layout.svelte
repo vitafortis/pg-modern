@@ -19,7 +19,8 @@
 		Users,
 		Plug,
 		Trash2,
-		ScrollText
+		ScrollText,
+		BellRing
 	} from '@lucide/svelte';
 	import { removeConnection } from '#lib/client/connections.ts';
 	import Logo from '#lib/components/Logo.svelte';
@@ -64,10 +65,13 @@
 					{ href: '/integrations', label: 'Integrations', icon: Plug },
 					{ href: '/users', label: 'Users', icon: Users },
 					{ href: '/audit', label: 'Audit log', icon: ScrollText },
+					{ href: '/alerts', label: 'Alerts', icon: BellRing },
 					{ href: '/settings', label: 'Settings', icon: Settings }
 				]
 			: [])
 	]);
+
+	const firing = $derived(Object.values(data.alerts ?? {}).reduce((n, a) => n + a.count, 0));
 
 	async function logout() {
 		await api.post('/api/auth/logout');
@@ -120,6 +124,7 @@
 						{#if active}<span class="absolute top-1.5 bottom-1.5 left-0 w-0.5 rounded-full bg-primary"></span>{/if}
 						<item.icon class="size-4 shrink-0" />
 						{#if !collapsed}{item.label}{/if}
+						{#if item.href === '/alerts' && firing && !collapsed}<span class="ml-auto rounded-full bg-danger/15 px-1.5 text-[10px] font-semibold text-danger tabular-nums">{firing}</span>{/if}
 					</a>
 				{/each}
 			</nav>
@@ -154,6 +159,10 @@
 							<span class="size-2 shrink-0 rounded-full" style="background:{COLORS[c.color] ?? COLORS.violet}; box-shadow: 0 0 8px {COLORS[c.color] ?? COLORS.violet}"></span>
 							{#if !collapsed}
 								<span class="min-w-0 flex-1 truncate">{c.name}</span>
+								{#if data.alerts?.[c.id]}
+									{@const a = data.alerts[c.id]}
+									<span title="{a.count} firing: {a.titles.join(', ')}"><BellRing class="size-3 shrink-0 {a.critical ? 'text-danger' : 'text-warning'}" /></span>
+								{/if}
 								{#if mixedEngines}<span class="opacity-75"><EngineBadge engine={c.engine} flavor={c.flavor} variant="tag" /></span>{/if}
 								<span class={isAdmin() ? 'group-focus-within:hidden group-hover:hidden' : ''}>
 									{#if c.access?.readOnly ?? true}

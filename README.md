@@ -25,6 +25,8 @@
 - **Saved queries**: name, describe and share queries per connection or for every connection; open them from the workspace header.
 - **EXPLAIN**: on Postgres, a visual plan tree with self time, misestimated row counts, buffers and the slowest node highlighted; `EXPLAIN ANALYZE` of a write runs inside a transaction that's rolled back. On MySQL the tree plan (`EXPLAIN ANALYZE` for reads on 8.0.18+), on MariaDB the JSON plan (`ANALYZE FORMAT=JSON` for reads).
 - **Server overview and activity**: version, size, cache hit ratio, extensions (storage engines and grants on MySQL); live sessions with lock chains, waiting and idle-in-transaction sessions, database and table sizes, dead tuples and unused indexes (Postgres) or the process list, InnoDB lock waits and index sizes (MySQL/MariaDB). Cancel or terminate a session (`KILL QUERY` / `KILL` on MySQL) once writes are unlocked.
+- **Alerts**: background checks for unreachable databases, connections near `max_connections`, long-running queries, database size and growth, transaction ID wraparound and replication lag, sent to ntfy, Gotify, Discord, Slack-compatible webhooks, a generic JSON webhook or Apprise.
+- **Size history**: hourly database and table sizes, kept for a year, with a growth chart and the fastest-growing tables in each connection's overview.
 - **Backup & restore**: an encrypted, passphrase-protected file with connections, users and settings that restores on a fresh install.
 - **Users and SSO**: sign in with any OIDC provider (Authentik, Authelia, Keycloak, Pocket ID, Google, …). Accounts can be created automatically for matching emails. *Admins* manage everything; *viewers* browse and query read-only.
 - **Schema diagram**: an ER view of each schema (each database, on MySQL) built from its foreign keys.
@@ -223,6 +225,70 @@ To build it yourself: `docker build -t pg-modern .`
 - Groups that declare an unsupported engine (`DB_CONNECTION=sqlite`, `database__client=sqlite3`) are ignored.
 
 Scan results stay on the server, and an import refers to them by key, so a discovered password goes straight into the encrypted store.
+
+## Alerts
+
+**Alerts** (admins only) checks every connection in the background, once a minute by default, and notifies you when something needs attention.
+
+**Channels.** Add one or more under **Alerts → Channels**, and use **Send test** to check it works. Every enabled channel gets every notification.
+
+| Channel | What you enter |
+| --- | --- |
+| ntfy | Server URL (`https://ntfy.sh` or your own), topic, optional access token |
+| Gotify | Server URL and an application token |
+| Discord | A channel webhook URL |
+| Slack-compatible | An incoming-webhook URL (Slack, Mattermost, Rocket.Chat, …) |
+| Webhook (JSON) | Any URL, plus an optional `Authorization` header |
+| Apprise API | A notify URL such as `http://apprise:8000/notify/<key>`, optional tag |
+
+Tokens, webhook URLs and the authorization header are encrypted like connection passwords and never sent back to the browser (the UI only shows the host). Leave a secret field blank when editing to keep it.
+
+The generic webhook receives a `POST` with `Content-Type: application/json`:
+
+```json
+{
+  "source": "pg-modern",
+  "version": 1,
+  "event": "fired",
+  "severity": "critical",
+  "status": "firing",
+  "title": "[FIRING] nextcloud-db: Database unreachable",
+  "alert": "Database unreachable",
+  "message": "Can’t connect: connect ECONNREFUSED 10.0.0.5:5432",
+  "rule": { "id": "…", "kind": "unreachable" },
+  "connection": { "id": "…", "name": "nextcloud-db", "engine": "postgres" },
+  "value": null,
+  "since": "2026-10-09T10:00:00.000Z",
+  "at": "2026-10-09T10:01:00.000Z",
+  "url": "https://pgm.example.com/c/…"
+}
+```
+
+`event` is `fired`, `resolved`, `renotified` or `test`; `status` is `firing`, `resolved` or `test`; `severity` is `critical` or `warning`; `rule.kind` is one of the rule kinds below; `value` is the measured number when there is one (percent, seconds, bytes); `url` is set when a public URL is configured under **Rules**.
+
+**Rules.** Adding the first channel turns on a default set, and **Add default rules** brings back any you deleted:
+
+| Rule | Default | |
+| --- | --- | --- |
+| Database unreachable | 2 failed checks in a row | Notifies again when it recovers |
+| Connections near the limit | > 80% of `max_connections` | Client connections only |
+| Long-running query | > 15 min | Active queries only; idle sessions, replication and autovacuum are ignored |
+| Database size above | > 50 GB | Off by default |
+| Fast database growth | > 25% in 24 h | Needs a day of size history |
+| Transaction ID wraparound | `age(datfrozenxid)` > 50% of 2³¹ | Postgres only |
+| Replication lag | > 300 s | Replay lag of replicas (on a primary) or of this server (on a replica); skipped without replication |
+
+A rule applies to all connections, or to one. A connection's own rule replaces the all-connections rule of the same kind, so you can raise a threshold for one database, or turn a check off for it by disabling its rule.
+
+**State and notifications.** Each (rule, connection) pair has its own state: *ok → pending → firing → ok*. pg·modern only notifies on transitions: when an alert fires, when it resolves (unless "Notify resolved" is off for that rule) and, while it keeps firing, again after the re-notify interval (6 h by default, 0 for never). While a database is unreachable, its other alerts keep their state rather than resolving. Every transition is kept in **Active & history**, with whether it reached the channels. Firing alerts also show as a bell on the connection's card in the overview and in the sidebar, for anyone who can see that connection.
+
+Checks are read-only, like everything else: each check uses one session per database through the normal read-only pool, with a 10 s statement timeout and a 2 s lock timeout. On MySQL/MariaDB, long queries and replication lag need the `PROCESS` and `REPLICATION CLIENT` privileges; without them, those rules stay quiet.
+
+## Size history
+
+Once an hour, pg·modern records each connection's database size (on a MySQL login without a default database: all user databases) and its 50 largest tables: `pg_total_relation_size` on Postgres (estimated from `relpages` for tables locked by a migration or `VACUUM FULL`, so sampling never waits behind a lock), `DATA_LENGTH + INDEX_LENGTH` from `information_schema.TABLES` on MySQL/MariaDB. Hourly samples are kept for 14 days, then rolled up to one per day (the day's last sample) and kept for a year. Removing a connection deletes its history.
+
+Each connection's **Overview** has a **Growth** chart for 7 days (hourly), 30 days or a year (daily), and the tables that grew most over that range. Admins can **Sample** to take a reading right away. The data is also available at `GET /api/connections/<id>/growth?range=7d|30d|1y` to anyone who can see the connection.
 
 ## Backup & restore
 

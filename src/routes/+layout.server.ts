@@ -2,6 +2,7 @@ import { redirect } from '@sveltejs/kit';
 import type { LayoutServerLoad } from './$types';
 import { visibleConnections } from '#lib/server/permissions.ts';
 import { ADMIN_PAGES } from '#lib/server/access.ts';
+import { firingSummary } from '#lib/server/alerts/store.ts';
 import type { Viewer } from '#lib/types.ts';
 
 export const load: LayoutServerLoad = ({ locals, url }) => {
@@ -15,10 +16,13 @@ export const load: LayoutServerLoad = ({ locals, url }) => {
 	const viewer: Viewer | null = user
 		? { email: user.email, name: user.name, role: user.role, hasPassword: user.hasPassword, sso: user.sso }
 		: null;
+	const connections = visibleConnections(user);
 	return {
 		auth: locals.auth,
 		viewer,
 		needsProfile: !!user?.needsProfile,
-		connections: visibleConnections(user)
+		connections,
+		/** Firing alerts per visible connection, for badges. */
+		alerts: user ? firingSummary(connections.map((c) => c.id)) : {}
 	};
 };

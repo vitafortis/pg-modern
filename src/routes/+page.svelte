@@ -12,8 +12,10 @@
 		Radar,
 		RefreshCw,
 		Settings2,
-		Trash2
+		Trash2,
+		BellRing
 	} from '@lucide/svelte';
+	import { page } from '$app/state';
 	import { removeConnection } from '#lib/client/connections.ts';
 	import PageHeader from '#lib/components/PageHeader.svelte';
 	import AccessBadge from '#lib/components/AccessBadge.svelte';
@@ -143,6 +145,10 @@
 								<EngineBadge engine={c.engine} flavor={s?.state === 'up' ? s.flavor : c.flavor} version={s?.state === 'up' ? s.version : undefined} />
 								<AccessBadge readOnly={c.access?.readOnly ?? true} unlocked={!!c.access?.unlockedUntil} />
 								<SourceBadge source={c.source} />
+								{#if page.data.alerts?.[c.id]}
+									{@const a = page.data.alerts[c.id]}
+									<span class="badge {a.critical ? 'badge-danger' : 'badge-warning'}" title={a.titles.join(', ')}><BellRing />{a.count === 1 ? a.titles[0] : `${a.count} alerts`}</span>
+								{/if}
 								{#if s?.state === 'up'}
 									<span class="badge font-mono">{s.latencyMs} ms</span>
 								{/if}

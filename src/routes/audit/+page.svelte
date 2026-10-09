@@ -74,7 +74,15 @@
 		'backup.export': 'Exported backup',
 		'backup.restore': 'Restored backup',
 		'session.cancel': 'Cancelled query',
-		'session.terminate': 'Terminated session'
+		'session.terminate': 'Terminated session',
+		'alerts.settings': 'Changed alert settings',
+		'alerts.channel.create': 'Added alert channel',
+		'alerts.channel.update': 'Changed alert channel',
+		'alerts.channel.delete': 'Deleted alert channel',
+		'alerts.channel.test': 'Tested alert channel',
+		'alerts.rule.create': 'Added alert rule',
+		'alerts.rule.update': 'Changed alert rule',
+		'alerts.rule.delete': 'Deleted alert rule'
 	};
 	const tone = (a: string) =>
 		/failed|delete/.test(a) ? 'text-danger' : /unlock|write|restore/.test(a) ? 'text-warning' : 'text-foreground';
