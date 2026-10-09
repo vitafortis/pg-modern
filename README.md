@@ -25,6 +25,7 @@
 - **Saved queries**: name, describe and share queries per connection or for every connection; open them from the workspace header.
 - **EXPLAIN**: on Postgres, a visual plan tree with self time, misestimated row counts, buffers and the slowest node highlighted; `EXPLAIN ANALYZE` of a write runs inside a transaction that's rolled back. On MySQL the tree plan (`EXPLAIN ANALYZE` for reads on 8.0.18+), on MariaDB the JSON plan (`ANALYZE FORMAT=JSON` for reads).
 - **Server overview and activity**: version, size, cache hit ratio, extensions (storage engines and grants on MySQL); live sessions with lock chains, waiting and idle-in-transaction sessions, database and table sizes, dead tuples and unused indexes (Postgres) or the process list, InnoDB lock waits and index sizes (MySQL/MariaDB). Cancel or terminate a session (`KILL QUERY` / `KILL` on MySQL) once writes are unlocked.
+- **Database backups**: scheduled `pg_dump` / `mariadb-dump` dumps (hourly, daily or weekly, with retention) to a folder, an NFS/SMB share, an SFTP server or S3-compatible storage such as MinIO. Download, restore and test destinations from the UI.
 - **Backup & restore**: an encrypted, passphrase-protected file with connections, users and settings that restores on a fresh install.
 - **Users and SSO**: sign in with any OIDC provider (Authentik, Authelia, Keycloak, Pocket ID, Google, …). Accounts can be created automatically for matching emails. *Admins* manage everything; *viewers* browse and query read-only.
 - **Schema diagram**: an ER view of each schema (each database, on MySQL) built from its foreign keys.
@@ -97,7 +98,7 @@ pg·modern has two roles:
 | Browse tables, run queries | ✓ | ✓ (all connections, or only the ones you pick) |
 | Write | ✓ on read/write connections; unlock read-only ones for 5–60 min | only by unlocking, on connections you allow |
 | Add, edit and delete connections | ✓ | |
-| Discover, Settings, Users, Audit log | ✓ | |
+| Discover, Settings, Users, Audit log, Backups | ✓ | |
 
 Set a viewer's access from **Users → Connections**. Every unlock is time-limited, needs no restart, and is recorded with its reason. The **Audit log** lists every query (who, where, whether it wrote, how it ended) and every sign-in, connection, user, access and settings change.
 
@@ -188,6 +189,7 @@ To build it yourself: `docker build -t pg-modern .`
 | `PGM_ARCANE_URL`, `PGM_ARCANE_API_KEY` | — | An Arcane instance to read projects from (or add it under Integrations) |
 | `PGM_STATEMENT_TIMEOUT_MS` | `30000` | Per-statement timeout |
 | `PGM_MAX_ROWS` | `5000` | Rows returned per result; the rest are truncated |
+| `TZ` | `UTC` | Time zone for backup schedules, e.g. `Europe/Berlin` |
 | `PGM_ADMIN_EMAIL`, `PGM_ADMIN_PASSWORD`, `PGM_ADMIN_NAME` | — | Create the first admin on start instead of using the setup wizard |
 | `PGM_AUTH` | — | `disabled` skips the login screen (trusted networks only) |
 | `PGM_LOCAL_LOGIN` | — | `disabled` hides the email/password form (SSO only); `enabled` forces it back on |
@@ -224,9 +226,63 @@ To build it yourself: `docker build -t pg-modern .`
 
 Scan results stay on the server, and an import refers to them by key, so a discovered password goes straight into the encrypted store.
 
+## Database backups
+
+**Backups** (admins only) dumps your databases on a schedule and keeps them on a NAS or in object storage.
+
+- **Postgres** uses `pg_dump --format=custom`, which compresses on its own and restores with `pg_restore`. The image ships PostgreSQL 18's client, which dumps and restores servers from 9.2 to 18 (`pg_dump` must be at least as new as the server).
+- **MySQL and MariaDB** use `mariadb-dump --single-transaction --routines --triggers --events --hex-blob`, gzipped. A connection with a default database dumps that database; one without (e.g. `root`) dumps every non-system database. The MariaDB client also backs up MySQL 5.7–8.4; MySQL-only features it doesn't know (some 8.x DDL) may not round-trip, so test a restore once.
+- Passwords go to the tools through the environment (`PGPASSWORD`, `MYSQL_PWD`), never the command line. Dumps stream straight to the destination; nothing is staged on local disk. A dump only reads, so read-only connections can be backed up.
+- The login needs read access to everything it dumps: on MySQL `SELECT`, `SHOW VIEW`, `TRIGGER`, `EVENT` and `LOCK TABLES`.
+
+### Destinations
+
+| Type | For | Notes |
+| --- | --- | --- |
+| **Folder** | A path inside the container, typically an NFS or SMB/CIFS share mounted as a Docker volume | The recommended NAS route; nothing to install on the NAS |
+| **SFTP** | Synology, TrueNAS, Unraid, any SSH server | Password or private key. **Test** shows the server's host key; pin it to refuse anything else |
+| **S3-compatible** | MinIO, Garage, TrueNAS, Synology C2, Backblaze B2, AWS | Endpoint, region, bucket, prefix, keys, path-style toggle. Uploads stream in 16 MiB multipart chunks, up to ~156 GiB per dump |
+
+**Test** writes, reads back and deletes a small file. Destination passwords and keys are encrypted like connection passwords and never sent back to the browser.
+
+To put backups on a NAS without mounting anything on the host, let Docker mount the share (also in [`compose.yaml`](compose.yaml)):
+
+```yaml
+services:
+  pg-modern:
+    volumes:
+      - pg-modern-data:/data
+      - nas-backups:/backups   # then add a Folder destination at /backups
+
+volumes:
+  nas-backups:
+    driver: local
+    driver_opts:               # NFS
+      type: nfs
+      o: addr=nas.lan,rw,nfsvers=4
+      device: ":/volume1/backups/pg-modern"
+  # or SMB / CIFS:
+  # nas-backups:
+  #   driver: local
+  #   driver_opts:
+  #     type: cifs
+  #     o: addr=nas.lan,username=backup,password=${NAS_PASSWORD},uid=1000,gid=1000,vers=3.0
+  #     device: //nas.lan/backups/pg-modern
+```
+
+The container runs as uid 1000, so the share must be writable by it (NFS: squash or own the export to 1000; CIFS: the `uid`/`gid` options above).
+
+### Schedules, retention and restores
+
+- A schedule backs up one connection or **all connections**, hourly (at a minute), daily (at `HH:MM`) or weekly, in the server's time zone (set `TZ`). If pg·modern was down at the scheduled time, the schedule runs once when it starts. **Run now** starts it immediately; **Back up now** on the Runs tab makes a one-off backup.
+- **Retention** runs after every successful backup: keep the last *N*, and/or everything younger than *N* days. A backup survives if either rule keeps it, and the newest one is always kept. One-off backups are never pruned.
+- **Runs** lists every backup and restore with its size, duration and errors. Backups can be downloaded (streamed from the folder, SFTP or S3) or deleted.
+- **Restore** puts a backup back into the same connection or another one of the same engine. The connection must accept your writes (read/write, or unlocked for a few minutes from the dialog), and you type the database name to confirm. Postgres restores use `pg_restore --clean --if-exists --no-owner`; MySQL restores pipe the dump into the `mariadb` client, with `DEFINER` clauses removed so views, routines and triggers belong to the restoring user. Every backup, download, restore and change is in the audit log.
+- Running from source (`pnpm dev`), backups need `pg_dump`/`pg_restore` and `mariadb-dump`/`mariadb` (or `mysqldump`/`mysql`) on `PATH`; the page says which ones are missing.
+
 ## Backup & restore
 
-**Settings → Backup & restore** downloads a `.pgmbackup` file with pg·modern's own configuration: connections (with their passwords), saved queries, users (password hashes, SSO links, connection access and grants), and settings (discovery, Arcane managers and their API keys, single sign-on, the password sign-in toggle). Query history, the audit log and sessions aren't included.
+**Settings → Backup & restore** downloads a `.pgmbackup` file with pg·modern's own configuration: connections (with their passwords), saved queries, users (password hashes, SSO links, connection access and grants), and settings (discovery, Arcane managers and their API keys, single sign-on, the password sign-in toggle). Query history, the audit log, sessions and database backup destinations and schedules aren’t included.
 
 The file is encrypted with a passphrase you choose (12+ characters), not the master key, so it also restores on a fresh install with a different `secret.key` or `PGM_SECRET_KEY`. Restoring first shows a preview of what would be added or updated, then merges the categories you pick: connections by id, users by email. Nothing is deleted, your own account is never changed, and settings are replaced as a whole. The API is `POST /api/backup` and `POST /api/backup/restore` (admins only).
 
