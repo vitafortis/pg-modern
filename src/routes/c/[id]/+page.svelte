@@ -223,7 +223,16 @@
 								</div>
 								<div class="min-h-0 flex-1">
 									{#if t.view === 'data'}
-										<TableView connectionId={conn.id} {engine} schema={t.schema} table={t.table} onquery={(sql) => openQuery(sql)} />
+										<TableView
+											connectionId={conn.id}
+											{engine}
+											schema={t.schema}
+											table={t.table}
+											{readOnly}
+											relKind={t.relKind}
+											onquery={(sql) => openQuery(sql)}
+											onimported={(s, n, created) => created && (loadTree(), loadCompletion(), openTable(s, n))}
+										/>
 									{:else}
 										<StructureView connectionId={conn.id} schema={t.schema} table={t.table} />
 									{/if}

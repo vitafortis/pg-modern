@@ -21,6 +21,8 @@
 - **Read-only by default**: every query runs in a `READ ONLY` transaction that is always rolled back (on MySQL/MariaDB only reads get through at all). Writes are opt-in per connection or unlocked for a few minutes at a time, and destructive statements still ask first.
 - **Access control and audit**: give viewers every connection or only selected ones, let specific people unlock writes temporarily, and see every query and change in the audit log.
 - **Browse**: schema tree; filter, sort, page and export tables; inspect JSON cells; view columns, indexes, constraints, foreign keys and triggers.
+- **Edit rows**: with write access, double-click a cell to edit it (text, numbers, true/false, NULL, JSON, enums), add rows and select rows to delete. Changes are staged and highlighted until you review the exact SQL and apply it in one transaction. Rows are matched on their full primary key (or a unique key on NOT NULL columns), and the old values of the edited columns are checked, so a row someone else changed in the meantime is reported instead of overwritten. Tables without a key only accept new rows.
+- **CSV import**: upload a file (up to 50 MB), check the detected delimiter and header, preview the first rows, map CSV columns to table columns, then insert in batches inside one transaction: all rows or none, with the failing row and line reported. Choose what happens to existing keys (stop, skip or update), empty the table first (type its name to confirm), or create a new table from the file with inferred, editable column types.
 - **Query**: SQL editor with schema-aware autocomplete. Run the statement under the cursor (`⌘↵`) or the whole script (`⇧⌘↵`), cancel long queries, keep a per-connection history, and export results to CSV or JSON.
 - **Saved queries**: name, describe and share queries per connection or for every connection; open them from the workspace header.
 - **EXPLAIN**: on Postgres, a visual plan tree with self time, misestimated row counts, buffers and the slowest node highlighted; `EXPLAIN ANALYZE` of a write runs inside a transaction that's rolled back. On MySQL the tree plan (`EXPLAIN ANALYZE` for reads on 8.0.18+), on MariaDB the JSON plan (`ANALYZE FORMAT=JSON` for reads).
@@ -97,11 +99,11 @@ pg·modern has two roles:
 | | Admin | Viewer |
 | --- | --- | --- |
 | Browse tables, run queries | ✓ | ✓ (all connections, or only the ones you pick) |
-| Write | ✓ on read/write connections; unlock read-only ones for 5–60 min | only by unlocking, on connections you allow |
+| Write (queries, row editing, CSV import) | ✓ on read/write connections; unlock read-only ones for 5–60 min | only by unlocking, on connections you allow |
 | Add, edit and delete connections | ✓ | |
 | Discover, Settings, Users, Audit log | ✓ | |
 
-Set a viewer's access from **Users → Connections**. Every unlock is time-limited, needs no restart, and is recorded with its reason. The **Audit log** lists every query (who, where, whether it wrote, how it ended) and every sign-in, connection, user, access and settings change.
+Set a viewer's access from **Users → Connections**. Every unlock is time-limited, needs no restart, and is recorded with its reason. The **Audit log** lists every query (who, where, whether it wrote, how it ended), every row edit and CSV import (`rows.edit`, `rows.import`, with counts; the generated SQL is in the query history), and every sign-in, connection, user, access and settings change.
 
 The first admin is created by the setup wizard, or headlessly with `PGM_ADMIN_EMAIL` and `PGM_ADMIN_PASSWORD`, which create it on first start and skip the wizard. Add more people from the **Users** page, or let them sign in through SSO. Everyone can change their name, email and password under **My account** (click your name in the sidebar).
 
@@ -190,6 +192,7 @@ To build it yourself: `docker build -t pg-modern .`
 | `PGM_ARCANE_URL`, `PGM_ARCANE_API_KEY` | — | An Arcane instance to read projects from (or add it under Integrations) |
 | `PGM_STATEMENT_TIMEOUT_MS` | `30000` | Per-statement timeout |
 | `PGM_MAX_ROWS` | `5000` | Rows returned per result; the rest are truncated |
+| `PGM_IMPORT_MAX_MB` | `50` | Largest CSV file that can be imported. Outside the Docker image (which sets `BODY_SIZE_LIMIT=64M`), also raise the server's `BODY_SIZE_LIMIT` (default `512K`) |
 | `PGM_ADMIN_EMAIL`, `PGM_ADMIN_PASSWORD`, `PGM_ADMIN_NAME` | — | Create the first admin on start instead of using the setup wizard |
 | `PGM_AUTH` | — | `disabled` skips the login screen (trusted networks only) |
 | `PGM_LOCAL_LOGIN` | — | `disabled` hides the email/password form (SSO only); `enabled` forces it back on |
