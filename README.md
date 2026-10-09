@@ -17,11 +17,13 @@
 
 - **Discover**: finds Postgres containers on your Docker hosts, connection strings in app containers, credentials in `.env`, `compose.yaml` and Terraform files, and every project managed by [Arcane](https://getarcane.app) through its API. Import them in one click.
 - **Encrypted storage**: connection passwords are sealed with AES-256-GCM. Discovered secrets never reach the browser.
-- **Read-only by default**: every query runs in a `READ ONLY` transaction that is always rolled back. Writes are opt-in per connection, and destructive statements still ask first.
+- **Read-only by default**: every query runs in a `READ ONLY` transaction that is always rolled back. Writes are opt-in per connection or unlocked for a few minutes at a time, and destructive statements still ask first.
+- **Access control and audit**: give viewers every connection or only selected ones, let specific people unlock writes temporarily, and see every query and change in the audit log.
 - **Browse**: schema tree; filter, sort, page and export tables; inspect JSON cells; view columns, indexes, constraints, foreign keys and triggers.
 - **Query**: SQL editor with schema-aware autocomplete. Run the statement under the cursor (`⌘↵`) or the whole script (`⇧⌘↵`), cancel long queries, keep a per-connection history, and export results to CSV or JSON.
 - **Server overview**: version, size, sessions, cache hit ratio, largest tables, extensions, and whether your role is a superuser.
-- **Users and SSO**: sign in with any OIDC provider (Authentik, Authelia, Keycloak, Pocket ID, Google, …). Accounts can be created automatically for matching emails. *Admins* manage everything; *viewers* can browse and query but are always read-only.
+- **Users and SSO**: sign in with any OIDC provider (Authentik, Authelia, Keycloak, Pocket ID, Google, …). Accounts can be created automatically for matching emails. *Admins* manage everything; *viewers* browse and query read-only.
+- **Schema diagram**: an ER view of each schema built from its foreign keys.
 - **Light and dark** themes, and multi-arch images (`amd64`, `arm64`).
 
 ## Getting started
@@ -78,7 +80,9 @@ pg·modern connects from inside its own container, so for each database it needs
 - **Unpublished databases** need pg·modern on the same Docker network. Add the network to the `pg-modern` service (see the comments in `compose.yaml`).
 - **Remote hosts** just need the host and port.
 
-Discovery probes every address it knows for a server and preselects the first one that answers.
+Discovery probes every address it knows for a server and preselects the first one that answers. It also shows which Docker networks each database is on, which of them pg·modern shares, and for databases it can't reach, the compose change that attaches pg·modern to the right network. pg·modern finds its own container by hostname or IP; set `PGM_SELF_CONTAINER` if you gave it a custom hostname.
+
+When a saved connection's address changes (a new port, a moved container), Discover flags it and can update the saved connection in place.
 
 ## Users and SSO
 
@@ -86,9 +90,12 @@ pg·modern has two roles:
 
 | | Admin | Viewer |
 | --- | --- | --- |
-| Browse tables, run queries | ✓ | ✓ (always read-only, even on read/write connections) |
+| Browse tables, run queries | ✓ | ✓ (all connections, or only the ones you pick) |
+| Write | ✓ on read/write connections; unlock read-only ones for 5–60 min | only by unlocking, on connections you allow |
 | Add, edit and delete connections | ✓ | |
-| Discover, Settings, Users | ✓ | |
+| Discover, Settings, Users, Audit log | ✓ | |
+
+Set a viewer's access from **Users → Connections**. Every unlock is time-limited, needs no restart, and is recorded with its reason. The **Audit log** lists every query (who, where, whether it wrote, how it ended) and every sign-in, connection, user, access and settings change.
 
 The first admin is created by the setup wizard, or headlessly with `PGM_ADMIN_EMAIL` and `PGM_ADMIN_PASSWORD`, which create it on first start and skip the wizard. Add more people from the **Users** page, or let them sign in through SSO. Everyone can change their name, email and password under **My account** (click your name in the sidebar).
 
@@ -222,7 +229,8 @@ Scan results stay on the server, and an import refers to them by key, so a disco
   4. Transaction and session control statements (`COMMIT`, `SET TRANSACTION`, `SET ROLE`, `RESET`, …) are rejected before they reach the server.
 
   For the strongest guarantee, also connect as a role that only has `pg_read_all_data`.
-- **Writable connections** confirm `DROP`, `TRUNCATE`, and `DELETE` / `UPDATE` without a `WHERE`.
+- **Writes** need a read/write connection or a temporary unlock, which uses a separate session pool and expires on its own. `DROP`, `TRUNCATE`, and `DELETE` / `UPDATE` without a `WHERE` must be confirmed; the server enforces this, not just the UI.
+- **Access** is checked on the server for every connection-scoped page and API call; connections a viewer wasn't given don't exist as far as they can tell.
 - **Sign-in** is by OIDC or by local accounts (scrypt-hashed passwords, login throttle). Sessions are httpOnly cookies tied to a user. Cross-origin API writes are rejected. Viewers are forced read-only on the server, not just hidden from buttons in the UI.
 
 ## Development
