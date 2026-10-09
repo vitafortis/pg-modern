@@ -15,7 +15,7 @@
 
 ## Features
 
-- **Discover**: finds Postgres containers on your Docker hosts, connection strings in app containers, credentials in `.env` and `compose.yaml` files, and every project managed by [Arcane](https://getarcane.app) through its API. Import them in one click.
+- **Discover**: finds Postgres containers on your Docker hosts, connection strings in app containers, credentials in `.env`, `compose.yaml` and Terraform files, and every project managed by [Arcane](https://getarcane.app) through its API. Import them in one click.
 - **Encrypted storage**: connection passwords are sealed with AES-256-GCM. Discovered secrets never reach the browser.
 - **Read-only by default**: every query runs in a `READ ONLY` transaction that is always rolled back. Writes are opt-in per connection, and destructive statements still ask first.
 - **Browse**: schema tree; filter, sort, page and export tables; inspect JSON cells; view columns, indexes, constraints, foreign keys and triggers.
@@ -199,13 +199,14 @@ To build it yourself: `docker build -t pg-modern .`
 
 **Arcane.** For each environment, every container is inspected through the API, with the same detection as local Docker. Each project's compose and `.env` content also goes through the same parser as files on disk. Results are merged per compose project.
 
-**Files.** Scan folders are walked for `.env`, `.env.*`, `*.env` and `compose.yaml` / `docker-compose.yml`.
+**Files.** Scan folders are walked for `.env`, `.env.*`, `*.env`, `compose.yaml` / `docker-compose.yml` and Terraform files (`*.tf`, `*.tfvars`, `terraform.tfstate`).
 
-- `node_modules`, `.git`, `*.example` and similar are skipped.
+- `node_modules`, `.git`, `.terraform`, `*.example` and similar are skipped.
 - From each file pg·modern picks up:
   - `postgres://` URLs in any variable
   - grouped keys like `DB_HOST` / `DB_USER` / `DB_PASSWORD`, `PGHOST` / `PGUSER`, `PAPERLESS_DBHOST`, and `POSTGRES_*`
   - Compose services, with `${VAR:-default}` interpolation from the neighbouring `.env`
+  - Terraform modules (each folder read as a whole): the `postgresql` provider and its login roles, `docker_container` resources, and `postgres://` URLs in any attribute. `var.*` comes from `*.auto.tfvars`, `terraform.tfvars`, other `*.tfvars` and variable defaults; `local.*` from `locals`. A local `terraform.tfstate` adds computed values (generated passwords) plus RDS / Aurora Postgres instances. Values that can't be resolved are flagged on the candidate.
 - Groups that declare another engine (`DB_CONNECTION=mysql`) are ignored.
 
 Scan results stay on the server, and an import refers to them by key, so a discovered password goes straight into the encrypted store.

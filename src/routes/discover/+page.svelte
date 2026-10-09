@@ -193,7 +193,7 @@
 
 <div class="flex h-full flex-col">
 	<div class="min-h-0 flex-1 overflow-y-auto">
-		<PageHeader title="Discover" description="Find Postgres servers in containers, .env and compose files, and Arcane projects.">
+		<PageHeader title="Discover" description="Find Postgres servers in containers, .env, compose and Terraform files, and Arcane projects.">
 			{#snippet actions()}
 				<button
 					class="btn btn-secondary"
@@ -442,7 +442,7 @@
 					</form>
 					{#if files}
 						<p class="mt-3 text-[11px] text-muted-foreground">
-							Checked {files.filesScanned} .env / compose file{files.filesScanned === 1 ? '' : 's'} in {files.durationMs} ms.
+							Checked {files.filesScanned} .env / compose / Terraform file{files.filesScanned === 1 ? '' : 's'} in {files.durationMs} ms.
 							{#if files.errors.length}<span class="text-warning">{files.errors.length} folder(s) unreadable: {files.errors.slice(0, 3).join(', ')}</span>{/if}
 						</p>
 					{/if}

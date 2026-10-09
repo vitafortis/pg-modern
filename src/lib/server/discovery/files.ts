@@ -5,6 +5,7 @@ import { config } from '../config.ts';
 import { getSettings } from '../store.ts';
 import { extractCandidates, interpolate, parseDotenv } from './env.ts';
 import { composeCandidates } from './compose.ts';
+import { isTerraformFile, terraformCandidates } from './terraform.ts';
 import { mapLimit, probe } from './probe.ts';
 import type { Candidate, EnvScanResult } from '#lib/types.ts';
 
@@ -15,6 +16,8 @@ const SKIP_DIRS = new Set([
 const ENV_FILE = /^(\.env(\..+)?|.+\.env|stack\.env)$/i;
 const COMPOSE_FILE = /^(docker-)?compose(\.[\w-]+)?\.ya?ml$/i;
 const MAX_FILE_BYTES = 512 * 1024;
+/** State files list every resource's attributes and get big. */
+const MAX_STATE_BYTES = 8 * 1024 * 1024;
 const MAX_FILES = 5000;
 
 export function expandHome(p: string): string {
@@ -36,7 +39,7 @@ async function walk(root: string, depth: number, out: string[], errors: string[]
 	}
 	for (const e of entries) {
 		const full = join(root, e.name);
-		if (e.isFile() && (ENV_FILE.test(e.name) || COMPOSE_FILE.test(e.name))) {
+		if (e.isFile() && (ENV_FILE.test(e.name) || COMPOSE_FILE.test(e.name) || isTerraformFile(e.name))) {
 			if (!/\.(example|sample|template|dist)$/i.test(e.name)) out.push(full);
 		} else if (e.isDirectory() && depth > 0 && !SKIP_DIRS.has(e.name)) {
 			await walk(full, depth - 1, out, errors);
@@ -44,10 +47,10 @@ async function walk(root: string, depth: number, out: string[], errors: string[]
 	}
 }
 
-async function readSmall(path: string): Promise<string | null> {
+async function readSmall(path: string, maxBytes = MAX_FILE_BYTES): Promise<string | null> {
 	try {
 		const s = await stat(path);
-		if (s.size > MAX_FILE_BYTES) return null;
+		if (s.size > maxBytes) return null;
 		return await readFile(path, 'utf8');
 	} catch {
 		return null;
@@ -74,7 +77,39 @@ export async function scanFiles(extraRoots: string[] = []): Promise<{ result: En
 	const composeDirs = new Set(paths.filter((p) => COMPOSE_FILE.test(basename(p))).map(dirname));
 	const files: EnvScanResult['files'] = [];
 	const all: Candidate[] = [];
-	await mapLimit(paths, 16, async (path) => {
+	const report = async (path: string, candidates: Candidate[]) => {
+		// An app service and the server it points at often resolve to the same target; keep the first.
+		candidates = candidates.filter((c, i) => candidates.findIndex((x) => x.fingerprint === c.fingerprint) === i);
+		await Promise.all(candidates.map(async (c) => (c.reachable = await probe(c.host, c.port))));
+		files.push({ path, candidates });
+		all.push(...candidates);
+	};
+
+	// A Terraform module is a whole directory: variables, locals and resources span its files.
+	const tfDirs = new Map<string, string[]>();
+	for (const p of paths) if (isTerraformFile(basename(p))) tfDirs.set(dirname(p), [...(tfDirs.get(dirname(p)) ?? []), p]);
+	await mapLimit([...tfDirs], 8, async ([dir, tfPaths]) => {
+		const tfFiles = [];
+		for (const path of tfPaths) {
+			const content = await readSmall(path, /\.tfstate$/.test(path) ? MAX_STATE_BYTES : MAX_FILE_BYTES);
+			if (content != null) tfFiles.push({ path, content });
+		}
+		let found: Candidate[];
+		try {
+			found = terraformCandidates(tfFiles, { project: basename(dir) });
+		} catch (err) {
+			errors.push(`${dir}: ${(err as Error).message}`);
+			return;
+		}
+		const byFile = new Map<string, Candidate[]>();
+		for (const c of found) {
+			const ref = c.source.ref || dir;
+			byFile.set(ref, [...(byFile.get(ref) ?? []), c]);
+		}
+		for (const [path, candidates] of byFile) await report(path, candidates);
+	});
+
+	await mapLimit(paths.filter((p) => !isTerraformFile(basename(p))), 16, async (path) => {
 		const content = await readSmall(path);
 		if (content == null) return;
 		const root = roots.find((r) => path.startsWith(r)) ?? dirname(path);
@@ -91,12 +126,7 @@ export async function scanFiles(extraRoots: string[] = []): Promise<{ result: En
 				requireHost: composeDirs.has(dirname(path))
 			});
 		}
-		if (!candidates.length) return;
-		// An app service and the server it points at often resolve to the same target; keep the first.
-		candidates = candidates.filter((c, i) => candidates.findIndex((x) => x.fingerprint === c.fingerprint) === i);
-		await Promise.all(candidates.map(async (c) => (c.reachable = await probe(c.host, c.port))));
-		files.push({ path, candidates });
-		all.push(...candidates);
+		if (candidates.length) await report(path, candidates);
 	});
 
 	files.sort((a, b) => a.path.localeCompare(b.path));

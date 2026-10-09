@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import {
 		ArrowUpRight,
+		Blocks,
 		Container,
 		Database,
 		FileCode2,
@@ -114,7 +115,7 @@
 						<a href="/c/{c.id}" class="relative block p-4">
 							<div class="flex items-start gap-3">
 								<div class="grid size-9 shrink-0 place-items-center rounded-lg border border-border bg-surface" style="color:{color}">
-									{#if c.source.kind === 'docker'}<Container class="size-4" />{:else if c.source.kind === 'env'}<FileCode2 class="size-4" />{:else}<Database class="size-4" />{/if}
+									{#if c.source.kind === 'docker'}<Container class="size-4" />{:else if c.source.kind === 'env'}<FileCode2 class="size-4" />{:else if c.source.kind === 'terraform'}<Blocks class="size-4" />{:else}<Database class="size-4" />{/if}
 								</div>
 								<div class="min-w-0 flex-1">
 									<div class="flex items-center gap-2">
