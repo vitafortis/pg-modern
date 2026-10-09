@@ -4,7 +4,8 @@ import { getSettings } from '../store.ts';
 import { extractCandidates, fingerprint } from './env.ts';
 import { looksLikePostgresServer } from './detect.ts';
 import { mapLimit, probe } from './probe.ts';
-import type { Candidate, DockerCandidateGroup } from '#lib/types.ts';
+import { findSelf, networkPath, type ContainerNetworks } from './network.ts';
+import type { Candidate, DockerCandidateGroup, NetworkPath, SelfNetworks } from '#lib/types.ts';
 
 
 
@@ -14,6 +15,36 @@ interface ContainerSummary {
 	Image: string;
 	State: string;
 	Status: string;
+	NetworkSettings?: { Networks?: Record<string, { IPAddress?: string }> | null } | null;
+}
+
+function summaryNetworks(c: ContainerSummary): ContainerNetworks {
+	return {
+		id: c.Id,
+		name: (c.Names?.[0] ?? c.Id.slice(0, 12)).replace(/^\//, ''),
+		networks: Object.fromEntries(Object.entries(c.NetworkSettings?.Networks ?? {}).map(([n, v]) => [n, v.IPAddress ?? ''])),
+		published: [],
+		running: c.State === 'running'
+	};
+}
+
+let selfCache: { at: number; value: SelfNetworks } | undefined;
+
+/** pg·modern's own networks, looked up on the configured Docker endpoints (cached briefly). */
+export async function dockerSelf(): Promise<SelfNetworks> {
+	if (selfCache && Date.now() - selfCache.at < 60_000) return selfCache.value;
+	let value: SelfNetworks = { inContainer: IN_CONTAINER, networks: [] };
+	for (const endpoint of dockerEndpoints()) {
+		try {
+			const found = findSelf((await dockerGet<ContainerSummary[]>(endpoint, '/containers/json')).map(summaryNetworks));
+			if (found.container) {
+				value = found;
+				break;
+			}
+		} catch {}
+	}
+	selfCache = { at: Date.now(), value };
+	return value;
 }
 
 interface ContainerInspect {
@@ -174,11 +205,14 @@ export async function discoverDocker(): Promise<{ groups: DockerCandidateGroup[]
 					dockerGet<ContainerInspect>(endpoint, `/containers/${c.Id}/json`).catch(() => null)
 				);
 				const kept = list.map((summary, i) => ({ summary, inspect: results[i] })).filter((x) => x.inspect !== null);
+				const self = findSelf(list.map(summaryNetworks));
+				if (self.container) selfCache = { at: Date.now(), value: self };
 				const inspected = kept.map((x) => x.inspect!);
 				const summaries = kept.map((x) => x.summary);
 
 				// Postgres servers first, so app containers can point at them by name.
 				const servers = new Map<string, Address[]>();
+				const paths = new Map<string, NetworkPath>();
 				const containers: DockerCandidateGroup['containers'] = [];
 
 				const isServer = (c: ContainerInspect) =>
@@ -202,9 +236,24 @@ export async function discoverDocker(): Promise<{ groups: DockerCandidateGroup[]
 						if (server) {
 							const internalPort = Number(env.PGPORT) || 5432;
 							const addresses = addressesFor(endpoint, c, internalPort);
+							const path = networkPath(
+								{
+									id: c.Id,
+									name,
+									networks: Object.fromEntries(Object.entries(c.NetworkSettings.Networks ?? {}).map(([n, v]) => [n, v.IPAddress ?? ''])),
+									published: addresses.filter((a) => a.label === 'published port').map(({ host, port }) => ({ host, port })),
+									running: summary.State === 'running'
+								},
+								self,
+								internalPort
+							);
 							// Service names ("db", "postgres") repeat across stacks, so scope them to the compose project.
 							servers.set(name.toLowerCase(), addresses);
-							if (project && service) servers.set(`${project}::${service}`.toLowerCase(), addresses);
+							paths.set(name.toLowerCase(), path);
+							if (project && service) {
+								servers.set(`${project}::${service}`.toLowerCase(), addresses);
+								paths.set(`${project}::${service}`.toLowerCase(), path);
+							}
 							if (!addresses.length) {
 								candidates.push(make({ host: name, port: internalPort, label: 'container name' }, [], false));
 							} else {
@@ -215,14 +264,6 @@ export async function discoverDocker(): Promise<{ groups: DockerCandidateGroup[]
 								const creds = postgresCredentials(env);
 								const notes = [...creds.notes];
 								if (summary.State !== 'running') notes.push(`Container is ${summary.State}.`);
-								else if (!reachable && IN_CONTAINER) {
-									const nets = Object.keys(c.NetworkSettings.Networks ?? {}).filter((n) => !['bridge', 'host', 'none'].includes(n));
-									notes.push(
-										nets.length
-											? `pg·modern can't reach it: publish port ${internalPort}, or add pg·modern to the ${nets.join(' / ')} network.`
-											: `pg·modern can't reach it: publish port ${internalPort} on the host.`
-									);
-								}
 								const base = { host: primary.host, port: primary.port, database: creds.database, user: creds.user };
 								return {
 									...base,
@@ -234,13 +275,15 @@ export async function discoverDocker(): Promise<{ groups: DockerCandidateGroup[]
 									source,
 									alternates,
 									notes,
-									reachable
+									reachable,
+									network: path
 								};
 							}
 						} else {
 							for (const cand of extractCandidates(env, { label, source })) {
 								const host = cand.host.toLowerCase();
 								const target = (project && servers.get(`${project}::${host}`.toLowerCase())) || servers.get(host);
+								cand.network = (project && paths.get(`${project}::${host}`.toLowerCase())) || paths.get(host);
 								if (/^(localhost|127\.0\.0\.1|::1)$/.test(host)) {
 									cand.notes.push('Configured as localhost inside the container, which may not be this host.');
 								}
@@ -275,7 +318,7 @@ export async function discoverDocker(): Promise<{ groups: DockerCandidateGroup[]
 					.map((c, i) => ({ id: c.Id.slice(0, 12), name: c.Name.replace(/^\//, ''), image: c.Config.Image, state: summaries[i].State }))
 					.filter((c) => !listed.has(c.id))
 					.sort((a, b) => a.name.localeCompare(b.name));
-				return { endpoint, inspected: inspected.length, containers, skipped };
+				return { endpoint, self, inspected: inspected.length, containers, skipped };
 			} catch (err) {
 				return { endpoint, error: explainDockerError(endpoint, err), containers: [] };
 			}

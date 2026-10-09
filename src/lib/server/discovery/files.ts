@@ -6,8 +6,8 @@ import { getSettings } from '../store.ts';
 import { extractCandidates, interpolate, parseDotenv } from './env.ts';
 import { composeCandidates } from './compose.ts';
 import { mapLimit } from './probe.ts';
-import { settleAddress } from './docker.ts';
-import type { Candidate, EnvScanResult } from '#lib/types.ts';
+import { dockerSelf, settleAddress } from './docker.ts';
+import type { Candidate, EnvScanResult, SelfNetworks } from '#lib/types.ts';
 
 const SKIP_DIRS = new Set([
 	'node_modules', '.git', '.hg', '.svn', 'vendor', '.venv', 'venv', '__pycache__', '.cache', '.next', '.nuxt',
@@ -55,13 +55,14 @@ async function readSmall(path: string): Promise<string | null> {
 	}
 }
 
-async function scanCompose(path: string, content: string): Promise<Candidate[]> {
+async function scanCompose(path: string, content: string, self: SelfNetworks): Promise<Candidate[]> {
 	const dir = dirname(path);
 	return composeCandidates(content, {
 		project: basename(dir),
 		source: { kind: 'env', ref: path },
 		vars: parseDotenv((await readSmall(join(dir, '.env'))) ?? ''),
-		readEnvFile: async (p) => parseDotenv((await readSmall(resolve(dir, p))) ?? '')
+		readEnvFile: async (p) => parseDotenv((await readSmall(resolve(dir, p))) ?? ''),
+		self
 	});
 }
 
@@ -71,6 +72,7 @@ export async function scanFiles(extraRoots: string[] = []): Promise<{ result: En
 	const errors: string[] = [];
 	const paths: string[] = [];
 	for (const root of roots) await walk(root, config.scanDepth, paths, errors);
+	const self = await dockerSelf();
 
 	const composeDirs = new Set(paths.filter((p) => COMPOSE_FILE.test(basename(p))).map(dirname));
 	const files: EnvScanResult['files'] = [];
@@ -82,7 +84,7 @@ export async function scanFiles(extraRoots: string[] = []): Promise<{ result: En
 		const label = relative(root, dirname(path)) || basename(root);
 		let candidates: Candidate[];
 		if (COMPOSE_FILE.test(basename(path))) {
-			candidates = await scanCompose(path, content);
+			candidates = await scanCompose(path, content, self);
 		} else {
 			const vars = parseDotenv(content);
 			for (const k of Object.keys(vars)) vars[k] = interpolate(vars[k], vars);
@@ -102,7 +104,7 @@ export async function scanFiles(extraRoots: string[] = []): Promise<{ result: En
 
 	files.sort((a, b) => a.path.localeCompare(b.path));
 	return {
-		result: { roots, filesScanned: paths.length, durationMs: Math.round(performance.now() - started), errors, files },
+		result: { self, roots, filesScanned: paths.length, durationMs: Math.round(performance.now() - started), errors, files },
 		candidates: all
 	};
 }

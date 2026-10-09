@@ -1,12 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { Boxes, CircleAlert, Container, FileCode2, FolderSearch, LoaderCircle, Plus, Radar, RefreshCw, Server, X, Download, Power, Wifi, EyeOff } from '@lucide/svelte';
+	import { Boxes, CircleAlert, Container, FileCode2, FolderSearch, LoaderCircle, Plus, Radar, RefreshCw, Server, X, Download, Power, Wifi, EyeOff, Network, Unplug, Copy } from '@lucide/svelte';
 	import PageHeader from '#lib/components/PageHeader.svelte';
 	import CandidateRow, { type Choice } from '#lib/components/CandidateRow.svelte';
 	import { api, errorMessage } from '#lib/client/api.ts';
 	import { refreshConnections, toast } from '#lib/client/state.svelte.ts';
-	import type { Candidate, Connection, DockerCandidateGroup, EnvScanResult, Manager, ManagerScan, Settings } from '#lib/types.ts';
+	import type { Candidate, Connection, DockerCandidateGroup, EnvScanResult, Manager, ManagerScan, SelfNetworks, Settings } from '#lib/types.ts';
+	import { joinNetworksSnippet } from '#lib/client/format.ts';
 
 	let tab = $state<'docker' | 'files' | 'managers'>('docker');
 	let docker = $state<DockerCandidateGroup[] | null>(null);
@@ -166,6 +167,38 @@
 		tab === 'docker' ? dockerTotal - dockerCount : tab === 'files' ? fileTotal - fileCount : managersTotal - managersVisible
 	);
 
+	// Where pg·modern itself sits, as seen by the scan behind the current tab.
+	const selfInfo = $derived.by((): SelfNetworks | undefined => {
+		const all =
+			tab === 'docker'
+				? (docker ?? []).map((g) => g.self)
+				: tab === 'files'
+					? [files?.self]
+					: (managerScans ?? []).flatMap((m) => m.environments.map((e) => e.self));
+		const known = all.filter((x): x is SelfNetworks => !!x);
+		return known.find((x) => x.container) ?? known[0];
+	});
+	const tabCandidates = $derived(
+		tab === 'docker'
+			? (docker ?? []).flatMap((g) => g.containers.flatMap((c) => c.candidates))
+			: tab === 'files'
+				? (files?.files ?? []).flatMap((f) => f.candidates)
+				: (managerScans ?? []).flatMap((m) => m.environments.flatMap((e) => e.projects.flatMap((p) => p.candidates)))
+	);
+	// Networks that would give pg·modern a route to databases it can't reach today.
+	const joinable = $derived.by(() => {
+		const byNet = new Map<string, Set<string>>();
+		for (const c of tabCandidates) {
+			if (c.reachable || c.network?.via !== 'none' || !c.network.join) continue;
+			const set = byNet.get(c.network.join) ?? new Set();
+			set.add(c.name);
+			byNet.set(c.network.join, set);
+		}
+		return [...byNet].map(([network, names]) => ({ network, names: [...names] })).sort((a, b) => b.names.length - a.names.length);
+	});
+	const stranded = $derived(joinable.reduce((n, j) => n + j.names.length, 0));
+	let showJoin = $state(false);
+
 	/** Path relative to the scan folder it was found in (the full path is in the tooltip). */
 	function relativePath(path: string) {
 		const root = files?.roots.find((r) => path.startsWith(`${r}/`));
@@ -269,6 +302,51 @@
 				{/if}
 			</div>
 			</div>
+
+			{#if selfInfo}
+				<div class="mb-3 flex flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
+					<Network class="size-3.5" />
+					{#if selfInfo.container}
+						pg·modern runs as <span class="font-mono text-foreground">{selfInfo.container}</span> on
+						{#each selfInfo.networks as n (n)}<span class="rounded-md border border-success/30 bg-success/10 px-1.5 py-px font-mono text-[11px] text-success">{n}</span>{/each}
+						<span>— databases on these networks are reachable by name.</span>
+					{:else if selfInfo.inContainer}
+						pg·modern isn’t one of this host’s containers, so only published ports are reachable from it.
+					{:else}
+						pg·modern isn’t running in a container; it reaches databases through published ports and container IPs.
+					{/if}
+				</div>
+			{/if}
+			{#if joinable.length}
+				<div class="card mb-4 border-warning/30 p-3.5 text-[12px]">
+					<div class="flex flex-wrap items-center gap-2">
+						<Unplug class="size-4 text-warning" />
+						<span class="text-foreground">
+							{stranded === 1 ? '1 database has' : `${stranded} databases have`} no route from pg·modern.
+							Attaching it to {joinable.length === 1 ? 'one network' : `${joinable.length} networks`} would fix that.
+						</span>
+						<button class="btn btn-secondary btn-sm ml-auto" onclick={() => (showJoin = !showJoin)}>{showJoin ? 'Hide' : 'Show'} compose change</button>
+					</div>
+					{#if showJoin}
+						<ul class="mt-3 space-y-1 text-muted-foreground">
+							{#each joinable as j (j.network)}
+								<li><span class="font-mono text-foreground">{j.network}</span> — {j.names.join(', ')}</li>
+							{/each}
+						</ul>
+						<div class="relative mt-2">
+							<pre class="overflow-x-auto rounded-lg border border-border bg-surface p-3 font-mono text-[11px] text-foreground">{joinNetworksSnippet(joinable.map((j) => j.network))}</pre>
+							<button
+								class="btn btn-ghost btn-icon btn-sm absolute top-1.5 right-1.5"
+								title="Copy"
+								onclick={() => navigator.clipboard.writeText(joinNetworksSnippet(joinable.map((j) => j.network))).then(() => toast('success', 'Copied'))}
+							>
+								<Copy />
+							</button>
+						</div>
+						<p class="mt-2 text-muted-foreground">Add this to pg·modern’s compose file and run <span class="font-mono">docker compose up -d</span>, then rescan.</p>
+					{/if}
+				</div>
+			{/if}
 
 			{#if tab === 'docker'}
 				{#if loadingDocker && !docker}

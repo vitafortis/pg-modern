@@ -39,6 +39,8 @@ export const config = {
 	/** Folders to scan for .env / compose files, in addition to ones saved in settings. */
 	scanPaths: list(process.env.PGM_SCAN_PATHS),
 	scanDepth: Number(process.env.PGM_SCAN_DEPTH ?? 6),
+	/** pg·modern's own container name, when hostname/IP matching can't find it (custom hostname, macvlan…). */
+	selfContainer: process.env.PGM_SELF_CONTAINER?.trim() || undefined,
 	/**
 	 * `disabled` hides the email/password form (SSO only); `enabled` forces it on,
 	 * overriding the UI setting — the break-glass if SSO is misconfigured.

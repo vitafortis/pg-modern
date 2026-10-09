@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { CircleAlert, KeyRound, Check, RefreshCw, ArrowRight } from '@lucide/svelte';
 	import Switch from './Switch.svelte';
+	import NetworkPathView from './NetworkPathView.svelte';
 	import type { Candidate } from '#lib/types.ts';
 
 	export interface Choice {
@@ -81,6 +82,9 @@
 				<a class="badge badge-success" href="/c/{candidate.saved.id}" title="Open the saved connection"><Check />saved as {candidate.saved.name}</a>
 			{/if}
 		</div>
+		{#if candidate.network}
+			<NetworkPathView path={candidate.network} reachable={candidate.reachable} />
+		{/if}
 		{#if candidate.saved?.addressChanged}
 			<div class="mt-2 rounded-lg border border-warning/30 bg-warning/5 px-2.5 py-2 text-[11px]">
 				<p class="text-foreground">

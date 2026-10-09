@@ -46,7 +46,7 @@ test('an app without a database name inherits the server it points at', async ()
 	assert.equal(app.fingerprint, server.fingerprint);
 });
 
-test('unpublished databases fall back to the service name with a note', async () => {
+test('unpublished databases fall back to the service name and report their network', async () => {
 	const out = await composeCandidates('services:\n  pg:\n    image: postgres\n    environment:\n      POSTGRES_PASSWORD: x\n', {
 		project: 'p',
 		source: { kind: 'env', ref: 'x' },
@@ -54,7 +54,8 @@ test('unpublished databases fall back to the service name with a note', async ()
 		readEnvFile: async () => ({})
 	});
 	assert.equal(out[0].host, 'pg');
-	assert.match(out[0].notes.join(' '), /No published port/);
+	assert.deepEqual(out[0].network?.networks, ['p_default']);
+	assert.equal(out[0].network?.via, 'none');
 });
 
 test('YAML anchors/merge keys and compose tags are understood', async () => {

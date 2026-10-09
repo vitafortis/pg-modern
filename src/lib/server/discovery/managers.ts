@@ -5,7 +5,8 @@ import { looksLikePostgresServer } from './detect.ts';
 import { envMap, pickReachable, postgresCredentials, settleAddress, uniqueAddresses, type Address } from './docker.ts';
 import { extractCandidates, fingerprint, parseDotenv } from './env.ts';
 import { mapLimit } from './probe.ts';
-import type { Candidate, Manager, ManagerScan } from '#lib/types.ts';
+import { findSelf, networkPath, type ContainerNetworks } from './network.ts';
+import type { Candidate, Manager, ManagerScan, NetworkPath, SelfNetworks } from '#lib/types.ts';
 
 export const ENV_MANAGER_ID = 'env-arcane';
 
@@ -112,7 +113,12 @@ async function scanArcaneContainers(
 	client: ArcaneClient,
 	manager: Manager,
 	env: { id: string; name: string; host: string }
-): Promise<{ groups: { project: string; status: string; candidates: Candidate[] }[]; inspected: number; skipped: { name: string; image: string; state: string }[] }> {
+): Promise<{
+	groups: { project: string; status: string; candidates: Candidate[] }[];
+	inspected: number;
+	skipped: { name: string; image: string; state: string }[];
+	self: SelfNetworks;
+}> {
 	const base = `/environments/${encodeURIComponent(env.id)}/containers`;
 	const list = (await client.list<ArcaneContainer>(base)).slice(0, 500);
 	const details = await mapLimit(list, 8, (c) =>
@@ -122,6 +128,15 @@ async function scanArcaneContainers(
 	const nameOf = (c: ArcaneContainer) => (c.name ?? c.names?.[0] ?? c.id.slice(0, 12)).replace(/^\//, '');
 	const stateOf = (c: ArcaneContainer) => (typeof c.state === 'string' ? c.state : (c.state?.status ?? c.status ?? 'unknown'));
 	const servers = new Map<string, Address[]>();
+	const paths = new Map<string, NetworkPath>();
+	const netsOf = (c: ArcaneContainer): ContainerNetworks => ({
+		id: c.id,
+		name: nameOf(c),
+		networks: Object.fromEntries(Object.entries(c.networkSettings?.networks ?? {}).map(([n, v]) => [n, v.ipAddress ?? ''])),
+		published: [],
+		running: stateOf(c) === 'running'
+	});
+	const self = findSelf(details.map(netsOf));
 	const out = new Map<string, { project: string; status: string; candidates: Candidate[] }>();
 	const push = (group: string, status: string, cand: Candidate) => {
 		const g = out.get(group) ?? { project: group, status, candidates: [] };
@@ -159,21 +174,22 @@ async function scanArcaneContainers(
 					{ host: name, port: internal, label: 'container name' },
 					...networks.filter(([, n]) => n.ipAddress).map(([net, n]) => ({ host: n.ipAddress!, port: internal, label: `${net} network` }))
 				]);
+				const path = networkPath(
+					{ ...netsOf(c), published: addresses.filter((a) => a.label === 'published port').map(({ host, port }) => ({ host, port })) },
+					self,
+					internal
+				);
 				servers.set(name.toLowerCase(), addresses);
-				if (project && service) servers.set(`${project}::${service}`.toLowerCase(), addresses);
+				paths.set(name.toLowerCase(), path);
+				if (project && service) {
+					servers.set(`${project}::${service}`.toLowerCase(), addresses);
+					paths.set(`${project}::${service}`.toLowerCase(), path);
+				}
 
 				const creds = postgresCredentials(vars);
 				const { primary, alternates, reachable } = await pickReachable(addresses);
 				const notes = [...creds.notes];
 				if (status !== 'running') notes.push(`Container is ${status}.`);
-				else if (!reachable) {
-					const nets = networks.map(([n]) => n).filter((n) => !['bridge', 'host', 'none'].includes(n));
-					notes.push(
-						addresses[0]?.label === 'published port'
-							? `Published on ${primary.host}:${primary.port}, but pg·modern can't reach it — check firewalls between the hosts.`
-							: `pg·modern can't reach it: publish port ${internal}${nets.length ? `, or add pg·modern to the ${nets.join(' / ')} network` : ''}.`
-					);
-				}
 				const base = { host: primary.host, port: primary.port, database: creds.database, user: creds.user };
 				push(group, status, {
 					...base,
@@ -185,12 +201,14 @@ async function scanArcaneContainers(
 					source,
 					alternates,
 					notes,
-					reachable
+					reachable,
+					network: path
 				});
 			} else {
 				for (const cand of extractCandidates(vars, { label: project && service ? `${project}/${service}` : name, source })) {
 					const host = cand.host.toLowerCase();
 					const target = (project && servers.get(`${project}::${host}`)) || servers.get(host);
+					cand.network = (project && paths.get(`${project}::${host}`)) || paths.get(host);
 					if (target?.length) {
 						const { primary, alternates, reachable } = await pickReachable(target);
 						cand.alternates = uniqueAddresses([{ host: cand.host, port: cand.port, label: 'as configured' }, ...alternates]).filter(
@@ -217,7 +235,7 @@ async function scanArcaneContainers(
 		.filter((c) => !used.has(c.id))
 		.map((c) => ({ name: nameOf(c), image: c.image, state: stateOf(c) }))
 		.sort((a, b) => a.name.localeCompare(b.name));
-	return { groups: [...out.values()], inspected: details.length, skipped };
+	return { groups: [...out.values()], inspected: details.length, skipped, self };
 }
 
 /** Address for ports published on an environment's Docker host. */
@@ -249,6 +267,7 @@ async function scanArcane(manager: Manager, apiKey: string): Promise<{ scan: Man
 			live = await scanArcaneContainers(client, manager, entry);
 			entry.containersInspected = live.inspected;
 			entry.skipped = live.skipped;
+			entry.self = live.self;
 		} catch (err) {
 			const message = (err as Error).message;
 			entry.warning = /rejected the API key|403/.test(message)
@@ -274,6 +293,7 @@ async function scanArcane(manager: Manager, apiKey: string): Promise<{ scan: Man
 						// Arcane keeps the project's env next to the compose file; other env_files aren't exposed.
 						readEnvFile: async (path) => (/^(\.\/)?\.env$/.test(path) ? vars : {}),
 						publishedHost: host,
+						self: live?.self,
 						onParseError: (message) => (entry.parseErrors ??= []).push({ project: p.name, message })
 					})
 				).filter((c) => !liveNames.has(c.name.toLowerCase()));

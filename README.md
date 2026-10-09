@@ -172,6 +172,7 @@ To build it yourself: `docker build -t pg-modern .`
 | `PGM_SECRET_KEY` | — | Master secret. Unset means a random key is generated in `secret.key` |
 | `PGM_SCAN_PATHS` | — | Comma-separated folders to scan (more can be added under Integrations) |
 | `PGM_SCAN_DEPTH` | `6` | How deep to recurse into scan folders |
+| `PGM_SELF_CONTAINER` | — | pg·modern's own container name, if Discover can't find it by hostname (used to show which databases share a network with it) |
 | `PGM_DOCKER_HOSTS` | local socket | `unix://…` or `tcp://host:2375`, comma-separated |
 | `PGM_ARCANE_URL`, `PGM_ARCANE_API_KEY` | — | An Arcane instance to read projects from (or add it under Integrations) |
 | `PGM_STATEMENT_TIMEOUT_MS` | `30000` | Per-statement timeout |

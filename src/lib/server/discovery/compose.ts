@@ -1,7 +1,8 @@
 import { parseDocument } from 'yaml';
 import { extractCandidates, fingerprint, interpolate } from './env.ts';
 import { looksLikePostgresServer } from './detect.ts';
-import type { Candidate, ConnectionSource } from '#lib/types.ts';
+import type { Candidate, ConnectionSource, SelfNetworks } from '#lib/types.ts';
+import { composeServiceNetworks, networkPath } from './network.ts';
 
 
 export interface ComposeContext {
@@ -16,6 +17,8 @@ export interface ComposeContext {
 	publishedHost?: string;
 	/** Called when the file isn't valid YAML, so callers can surface it instead of silently skipping. */
 	onParseError?: (message: string) => void;
+	/** pg·modern's own networks, to work out which services it can reach by name. */
+	self?: SelfNetworks;
 }
 
 /**
@@ -33,6 +36,8 @@ type ComposeService = {
 	environment?: Record<string, string | number | null> | string[];
 	env_file?: string | string[] | { path: string }[];
 	ports?: (string | number | { target: number; published?: string | number; host_ip?: string })[];
+	networks?: string[] | Record<string, unknown> | null;
+	network_mode?: string;
 };
 
 function composeEnv(env: ComposeService['environment']): Record<string, string> {
@@ -71,7 +76,7 @@ function publishedPort(ports: ComposeService['ports'], target: number, dockerHos
  */
 export async function composeCandidates(content: string, ctx: ComposeContext): Promise<Candidate[]> {
 	const vars = ctx.vars;
-	let doc: { services?: Record<string, ComposeService>; name?: string };
+	let doc: { services?: Record<string, ComposeService>; name?: string; networks?: Parameters<typeof composeServiceNetworks>[2] };
 	try {
 		const parsed = parseCompose(content);
 		if (parsed.errors.length) ctx.onParseError?.(parsed.errors[0]);
@@ -98,6 +103,7 @@ export async function composeCandidates(content: string, ctx: ComposeContext): P
 
 	// Map service names → reachable addresses, so app services referencing "db" resolve.
 	const servers = new Map<string, { addrs: { host: string; port: number; label: string }[]; server: Candidate }>();
+	const self = ctx.self ?? { inContainer: false, networks: [] };
 	for (const [name, svc] of Object.entries(services)) {
 		const env = await serviceEnv(svc);
 		const exposed = (svc.ports ?? []).some((p) => /(^|:)5432(\/tcp)?$/.test(typeof p === 'object' ? String(p.target) : String(p)));
@@ -114,7 +120,6 @@ export async function composeCandidates(content: string, ctx: ComposeContext): P
 		const password = env.POSTGRES_PASSWORD || env.POSTGRESQL_PASSWORD || undefined;
 		const notes: string[] = [];
 		if (!password && env.POSTGRES_PASSWORD_FILE) notes.push('Password comes from a secret file; enter it manually.');
-		if (!pub) notes.push('No published port — reachable only from the compose network.');
 		const base = { host: addrs[0].host, port: addrs[0].port, database: env.POSTGRES_DB || env.POSTGRESQL_DATABASE || user, user };
 		const server: Candidate = {
 			...base,
@@ -125,7 +130,18 @@ export async function composeCandidates(content: string, ctx: ComposeContext): P
 			sslMode: 'prefer',
 			source: ctx.source,
 			alternates: addrs.slice(1),
-			notes
+			notes,
+			network: networkPath(
+				{
+					id: name,
+					name: svc.container_name ?? name,
+					networks: Object.fromEntries(composeServiceNetworks(project, svc, doc.networks).map((n) => [n, ''])),
+					published: pub ? [{ host: pub.host, port: pub.port }] : [],
+					running: true
+				},
+				self,
+				internal
+			)
 		};
 		out.push(server);
 		servers.set(name.toLowerCase(), { addrs, server });
@@ -143,6 +159,7 @@ export async function composeCandidates(content: string, ctx: ComposeContext): P
 				// No database configured (it defaulted to the user name): use the one the server creates.
 				if (c.user === target.server.user && c.database === c.user) c.database = target.server.database;
 				c.fingerprint = fingerprint(c);
+				c.network = target.server.network;
 			}
 			out.push(c);
 		}

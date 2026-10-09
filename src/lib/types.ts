@@ -67,10 +67,35 @@ export interface Candidate {
 	 */
 	saved?: { id: string; name: string; host: string; port: number; addressChanged: boolean };
 	reachable?: boolean;
+	/** For containers: which networks the database is on and how pg·modern gets to it. */
+	network?: NetworkPath;
+}
+
+/** pg·modern's own container and the Docker networks it's attached to. */
+export interface SelfNetworks {
+	inContainer: boolean;
+	/** Our container's name, when we found it in this Docker host's container list. */
+	container?: string;
+	networks: string[];
+}
+
+export interface NetworkPath {
+	/** Networks the database container is attached to. */
+	networks: string[];
+	/** Of those, the ones pg·modern is attached to as well. */
+	shared: string[];
+	/** Ports published on the host for the database port. */
+	published: { host: string; port: number }[];
+	via: 'shared-network' | 'published-port' | 'host-network' | 'none';
+	/** A network that pg·modern could join to reach it. */
+	join?: string;
+	/** The container port that could be published instead. */
+	publish?: number;
 }
 
 export interface DockerCandidateGroup {
 	endpoint: string;
+	self?: SelfNetworks;
 	error?: string;
 	/** How many containers were inspected on this endpoint. */
 	inspected?: number;
@@ -87,6 +112,7 @@ export interface DockerCandidateGroup {
 }
 
 export interface EnvScanResult {
+	self?: SelfNetworks;
 	roots: string[];
 	filesScanned: number;
 	durationMs: number;
@@ -177,6 +203,7 @@ export interface ManagerScan {
 		containersInspected?: number;
 		/** Containers with no Postgres server or credentials found. */
 		skipped?: { name: string; image: string; state: string }[];
+		self?: SelfNetworks;
 		/** Compose files that didn't parse cleanly (results are best-effort). */
 		parseErrors?: { project: string; message: string }[];
 		projects: { id: string; name: string; status: string; candidates: Candidate[] }[];

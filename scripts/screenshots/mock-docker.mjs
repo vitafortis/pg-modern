@@ -42,6 +42,27 @@ export function startMockDocker({ port, dbPort, user, password }) {
 			'exited',
 			'Exited (0) 2 days ago'
 		),
+		// Like many homelab databases: no published port, only reachable on a shared network.
+		{
+			...pg('f6a1b2c3d4e5', 'scanopy-postgres-1', 'postgres:17', 'scanopy', 'postgres', {
+				POSTGRES_USER: 'scanopy',
+				POSTGRES_PASSWORD: password,
+				POSTGRES_DB: 'scanopy'
+			}, 'running', 'Up 5 days', false),
+			networks: { database: { IPAddress: '172.22.0.3', Aliases: ['postgres'] }, scanopy_default: { IPAddress: '172.31.0.3', Aliases: ['postgres'] } }
+		},
+		{
+			id: '0a1b2c3d4e5f',
+			name: 'pg-modern',
+			image: 'ghcr.io/vitafortis/pg-modern:latest',
+			state: 'running',
+			status: 'Up 2 hours',
+			project: 'pg-modern',
+			service: 'pg-modern',
+			env: {},
+			ports: { '3000/tcp': [{ HostIp: '0.0.0.0', HostPort: '3030' }] },
+			networks: { 'pg-modern_default': { IPAddress: '172.30.0.2', Aliases: ['pg-modern'] }, immich_default: { IPAddress: '172.31.12.9', Aliases: ['pg-modern'] } }
+		},
 		{
 			id: 'e5f6a1b2c3d4',
 			name: 'gitea',
@@ -66,7 +87,9 @@ export function startMockDocker({ port, dbPort, user, password }) {
 			res.end(JSON.stringify(body));
 		};
 		if (url.pathname === '/containers/json') {
-			return send(containers.map((c) => ({ Id: c.id, Names: [`/${c.name}`], Image: c.image, State: c.state, Status: c.status })));
+			return send(
+				containers.map((c) => ({ Id: c.id, Names: [`/${c.name}`], Image: c.image, State: c.state, Status: c.status, NetworkSettings: { Networks: c.networks } }))
+			);
 		}
 		const m = /^\/containers\/([^/]+)\/json$/.exec(url.pathname);
 		const c = m && containers.find((x) => x.id === m[1]);

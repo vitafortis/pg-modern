@@ -82,6 +82,7 @@ async function main() {
 			PGM_DATA_DIR: join(tmp, 'data'),
 			PGM_DOCKER_HOSTS: `tcp://127.0.0.1:${DOCKER_PORT}`,
 			PGM_SCAN_PATHS: STACKS,
+			PGM_SELF_CONTAINER: 'pg-modern',
 			NODE_OPTIONS: '--disable-warning=ExperimentalWarning'
 		}
 	});

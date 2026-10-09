@@ -65,3 +65,18 @@ export const COLORS: Record<string, string> = {
 	rose: 'oklch(66% 0.21 15)',
 	slate: 'oklch(65% 0.02 260)'
 };
+
+/** Compose snippet that attaches pg·modern to existing Docker networks. */
+export function joinNetworksSnippet(networks: string[]): string {
+	const list = [...new Set(networks)].sort();
+	return [
+		'services:',
+		'  pg-modern:',
+		'    networks:',
+		'      - default',
+		...list.map((n) => `      - ${n}`),
+		'',
+		'networks:',
+		...list.flatMap((n) => [`  ${n}:`, '    external: true'])
+	].join('\n');
+}
