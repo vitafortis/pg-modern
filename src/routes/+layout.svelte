@@ -19,7 +19,8 @@
 		Users,
 		Plug,
 		Trash2,
-		ScrollText
+		ScrollText,
+		DatabaseBackup
 	} from '@lucide/svelte';
 	import { removeConnection } from '#lib/client/connections.ts';
 	import Logo from '#lib/components/Logo.svelte';
@@ -64,6 +65,7 @@
 					{ href: '/integrations', label: 'Integrations', icon: Plug },
 					{ href: '/users', label: 'Users', icon: Users },
 					{ href: '/audit', label: 'Audit log', icon: ScrollText },
+					{ href: '/backups', label: 'Backups', icon: DatabaseBackup },
 					{ href: '/settings', label: 'Settings', icon: Settings }
 				]
 			: [])

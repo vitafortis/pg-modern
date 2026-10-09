@@ -7,7 +7,7 @@ import { createGunzip, createGzip } from 'node:zlib';
 import { pipeline } from 'node:stream/promises';
 import { PassThrough, type Duplex, type Readable } from 'node:stream';
 import { getConnection, getPassword, listConnections } from '../store.ts';
-import { dumpFileName, isDue, nextRunAt, selectForPruning, type BackupRun, type BackupSchedule, type DumpFormat } from '#lib/backups.ts';
+import { dumpFileName, isDue, restoreConfirmation, nextRunAt, selectForPruning, type BackupRun, type BackupSchedule, type DumpFormat } from '#lib/backups.ts';
 import type { Connection } from '#lib/types.ts';
 import { driverFor, type Driver } from './destinations.ts';
 import * as store from './store.ts';
@@ -287,11 +287,6 @@ async function executeRestore(restore: BackupRun, source: BackupRun, target: Con
 	}
 }
 
-/** What the person must type to confirm a restore: the database it overwrites (the connection name for every-database dumps). */
-export function restoreConfirmation(run: Pick<BackupRun, 'allDatabases'>, target: Pick<Connection, 'database' | 'name'>): string {
-	return (!run.allDatabases && target.database) || target.name;
-}
-
 /** Problems that make a restore impossible regardless of who asks. */
 export function restoreProblem(run: BackupRun, target: Connection): string | null {
 	if (run.kind !== 'backup' || run.status !== 'success' || !run.fileName) return 'Only successful backups can be restored';
@@ -305,4 +300,4 @@ export function restoreProblem(run: BackupRun, target: Connection): string | nul
 	return null;
 }
 
-export { MissingTool };
+export { MissingTool, restoreConfirmation };

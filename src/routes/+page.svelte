@@ -55,6 +55,12 @@
 
 	onMount(checkAll);
 
+	// Admins see when each connection was last backed up.
+	let lastBackup = $state<Record<string, { at: string }>>({});
+	onMount(() => {
+		if (isAdmin()) api.get<Record<string, { at: string }>>('/api/backups/latest').then((r) => (lastBackup = r)).catch(() => {});
+	});
+
 	const stats = $derived([
 		{ label: 'Connections', value: connections.list.length, icon: Database },
 		{ label: 'Online', value: Object.values(status).filter((s) => s.state === 'up').length, icon: ArrowUpRight, tone: 'text-success' },
@@ -153,7 +159,7 @@
 							{/if}
 						</a>
 						<div class="relative flex items-center justify-between border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
-							<span>Last used {ago(c.lastConnectedAt)}</span>
+							<span>Last used {ago(c.lastConnectedAt)}{#if isAdmin()}{' · '}<a class="hover:text-primary" href="/backups">{lastBackup[c.id] ? `backed up ${ago(lastBackup[c.id].at)}` : 'no backup'}</a>{/if}</span>
 							{#if isAdmin()}
 								<div class="-mr-2 flex items-center opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
 									<button class="btn btn-ghost btn-sm" onclick={() => (editor.target = c)}><Settings2 />Edit</button>

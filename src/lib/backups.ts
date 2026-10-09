@@ -229,6 +229,11 @@ export function selectForPruning<R extends Pick<BackupRun, 'id' | 'status' | 'st
 	});
 }
 
+/** What the person must type to confirm a restore: the database it overwrites (the connection name for every-database dumps). */
+export function restoreConfirmation(run: Pick<BackupRun, 'allDatabases'>, target: { database: string; name: string }): string {
+	return (!run.allDatabases && target.database) || target.name;
+}
+
 // --- file names ------------------------------------------------------------------
 
 /** A file-name-safe version of a connection name. */
