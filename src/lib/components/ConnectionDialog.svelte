@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { removeConnection } from '#lib/client/connections.ts';
 	import { goto } from '$app/navigation';
-	import { CircleCheck, CircleAlert, LoaderCircle, Lock, PencilLine, Trash2, Zap } from '@lucide/svelte';
+	import { CircleCheck, CircleAlert, LoaderCircle, Lock, PencilLine, ShieldCheck, Trash2, Zap } from '@lucide/svelte';
 	import Dialog from './Dialog.svelte';
+	import ReadOnlyUserDialog from './ReadOnlyUserDialog.svelte';
+	import { roHelper } from '#lib/client/readonly-user.svelte.ts';
 	import Switch from './Switch.svelte';
 	import { api, errorMessage } from '#lib/client/api.ts';
 	import { COLORS } from '#lib/client/format.ts';
@@ -285,6 +287,24 @@
 			<Switch label="Read-only" bind:checked={form.readOnly} />
 		</div>
 
+		{#if editing && (editing.engine === 'postgres' || editing.engine === 'mysql')}
+			<button
+				type="button"
+				class="flex w-full items-center gap-3 rounded-xl border border-dashed border-border p-3 text-left transition-colors hover:border-primary/40 hover:bg-primary/5"
+				onclick={() => {
+					// Hand over before closing: `editing` is derived from editor.target.
+					roHelper.target = editing;
+					editor.target = null;
+				}}
+			>
+				<ShieldCheck class="size-4 shrink-0 text-primary" />
+				<span class="flex-1">
+					<span class="block text-[13px] font-medium">Create a read-only user for pg·modern</span>
+					<span class="block text-xs text-muted-foreground">Generate SQL for a dedicated login with only read privileges, then switch this connection to it.</span>
+				</span>
+			</button>
+		{/if}
+
 		{#if test}
 			<div
 				class="flex items-start gap-2 rounded-lg border p-3 text-xs {test.ok
@@ -328,3 +348,7 @@
 		</button>
 	{/snippet}
 </Dialog>
+
+{#if roHelper.target}
+	<ReadOnlyUserDialog bind:open={() => !!roHelper.target, (v) => !v && (roHelper.target = null)} conn={roHelper.target} />
+{/if}

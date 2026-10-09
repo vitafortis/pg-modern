@@ -9,6 +9,9 @@ import * as pgActivity from './activity.ts';
 import * as my from './mysql/client.ts';
 import * as myIntrospect from './mysql/introspect.ts';
 import * as myActivity from './mysql/activity.ts';
+import { health as pgHealth } from './health.ts';
+import { mysqlHealth } from './mysql/health.ts';
+import type { HealthReport } from '#lib/health.ts';
 import { isDestructiveMysql } from './mysql/classify.ts';
 import { isDestructive as isDestructivePg, splitStatements as splitPg } from './sql.ts';
 import { getConnection, getPassword, setFlavor, touchConnection } from './store.ts';
@@ -169,4 +172,14 @@ export async function activity(id: string) {
 
 export async function signalBackend(id: string, pid: number, terminate: boolean) {
 	return engineOf(id) === 'mysql' ? myActivity.mysqlSignal(id, pid, terminate) : pgActivity.signalBackend(id, pid, terminate);
+}
+
+// --- health ----------------------------------------------------------------------------
+
+/** Health checks for engines that have them; null for others (the tab is hidden there). */
+export async function health(id: string): Promise<HealthReport | null> {
+	const engine: string = engineOf(id);
+	if (engine === 'postgres') return pgHealth(id);
+	if (engine === 'mysql') return mysqlHealth(id);
+	return null;
 }
