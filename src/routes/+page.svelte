@@ -19,6 +19,7 @@
 	import AccessBadge from '#lib/components/AccessBadge.svelte';
 	import SourceBadge from '#lib/components/SourceBadge.svelte';
 	import EngineBadge from '#lib/components/EngineBadge.svelte';
+	import SuperuserHint from '#lib/components/SuperuserHint.svelte';
 	import { api } from '#lib/client/api.ts';
 	import { ago, COLORS } from '#lib/client/format.ts';
 	import { connections, editor, isAdmin } from '#lib/client/state.svelte.ts';
@@ -152,6 +153,7 @@
 								{#if s.hint}<p class="mt-1 line-clamp-3 text-[11px] text-muted-foreground">{s.hint}</p>{/if}
 							{/if}
 						</a>
+						<SuperuserHint conn={c} online={s?.state === 'up'} />
 						<div class="relative flex items-center justify-between border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
 							<span>Last used {ago(c.lastConnectedAt)}</span>
 							{#if isAdmin()}

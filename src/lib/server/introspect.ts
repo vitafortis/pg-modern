@@ -2,7 +2,7 @@ import { readQuery, withClient, typeParsers } from './pg.ts';
 import { quoteIdent } from './sql.ts';
 import type { ColumnInfo, DiagramColumn, RelationSummary, SchemaDiagram, SchemaTree } from '#lib/types.ts';
 
-const SYSTEM_SCHEMA_FILTER = `n.nspname not in ('pg_catalog', 'information_schema')
+export const SYSTEM_SCHEMA_FILTER = `n.nspname not in ('pg_catalog', 'information_schema')
 	and n.nspname not like 'pg\\_toast%' and n.nspname not like 'pg\\_temp\\_%'`;
 
 const KIND: Record<string, RelationSummary['kind']> = {
@@ -18,7 +18,7 @@ const KIND: Record<string, RelationSummary['kind']> = {
  * VACUUM FULL, …), which would stall the whole query. For such tables, estimate from
  * planner statistics instead.
  */
-const sizeOf = (oid: string, fn = 'pg_total_relation_size') =>
+export const sizeOf = (oid: string, fn = 'pg_total_relation_size') =>
 	`case when exists (select 1 from pg_locks l where l.relation = ${oid} and l.mode = 'AccessExclusiveLock' and l.granted and l.pid <> pg_backend_pid())
 		then ${oid === 'c.oid' ? 'c.relpages' : `(select relpages from pg_class where oid = ${oid})`}::bigint * current_setting('block_size')::bigint
 		else ${fn}(${oid}) end`;
