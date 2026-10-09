@@ -3,6 +3,9 @@
 	import { Gauge, Plus, Settings2, SquareTerminal, Table2, X, Eye, Layers, Rows3, Columns3 } from '@lucide/svelte';
 	import { Network } from '@lucide/svelte';
 	import { Activity } from '@lucide/svelte';
+	import { History } from '@lucide/svelte';
+	import SchemaHistory from '#lib/components/SchemaHistory.svelte';
+	import { registerWorkspace } from '#lib/client/palette.svelte.ts';
 	import SchemaTree from '#lib/components/SchemaTree.svelte';
 	import TableView from '#lib/components/TableView.svelte';
 	import StructureView from '#lib/components/StructureView.svelte';
@@ -25,7 +28,8 @@
 		| { id: string; kind: 'table'; schema: string; table: string; relKind: RelationSummary['kind']; view: 'data' | 'structure' }
 		| { id: string; kind: 'query'; title: string; sql: string; saved?: { id: string; name: string } | null }
 		| { id: string; kind: 'diagram'; schema: string }
-		| { id: string; kind: 'activity' };
+		| { id: string; kind: 'activity' }
+		| { id: string; kind: 'schema' };
 
 	let { data }: PageProps = $props();
 
@@ -125,18 +129,41 @@
 		activeId = 'activity';
 	}
 
+	/** Schema history tab (snapshots + diff); `compose` opens the snapshot form. */
+	let composingSnapshot = $state(false);
+	function openSchema(compose = false) {
+		if (!tabs.some((t) => t.id === 'schema')) tabs.push({ id: 'schema', kind: 'schema' });
+		activeId = 'schema';
+		if (compose) composingSnapshot = true;
+	}
+
+	// The command palette (⌘K) drives this workspace: new query, open table, tabs.
+	$effect(() => {
+		const connectionId = data.connection.id;
+		return untrack(() =>
+			registerWorkspace({
+				connectionId,
+				newQuery: (sql, saved) => openQuery(sql, saved ?? null),
+				openTable: (schema, table, kind) => openTable(schema, table, kind),
+				openTab: (kind) => {
+					if (kind === 'schema') openSchema();
+					else if (kind === 'diagram') openDiagram();
+					else if (kind === 'activity') openActivity();
+					else {
+						if (!tabs.some((t) => t.id === 'overview')) tabs.unshift({ id: 'overview', kind: 'overview' });
+						activeId = 'overview';
+					}
+				},
+				snapshot: () => openSchema(true)
+			})
+		);
+	});
+
 	function close(id: string) {
 		const i = tabs.findIndex((t) => t.id === id);
 		tabs.splice(i, 1);
 		if (!tabs.length) tabs.push({ id: 'overview', kind: 'overview' });
 		if (activeId === id) activeId = tabs[Math.min(i, tabs.length - 1)].id;
-	}
-
-	function onkeydown(e: KeyboardEvent) {
-		if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k' && !e.shiftKey) {
-			e.preventDefault();
-			openQuery();
-		}
 	}
 
 	const active = $derived(tabs.find((t) => t.id === activeId));
@@ -145,7 +172,6 @@
 </script>
 
 <svelte:head><title>{conn.name} · pg·modern</title></svelte:head>
-<svelte:window {onkeydown} />
 
 <div class="flex h-full flex-col">
 	<header class="flex h-14 shrink-0 items-center gap-3 border-b border-border px-4">
@@ -157,10 +183,11 @@
 		<EngineBadge {engine} flavor={conn.flavor} />
 		<WriteAccess {conn} />
 		<div class="ml-auto flex items-center gap-1.5">
-			<button class="btn btn-secondary btn-sm" onclick={() => openQuery()} title="New query (⌘K)"><SquareTerminal />New query</button>
+			<button class="btn btn-secondary btn-sm" onclick={() => openQuery()} title="New query (⌘K ↵)"><SquareTerminal />New query</button>
 			<SavedQueriesMenu connectionId={conn.id} onopen={(q) => openQuery(q.sql, { id: q.id, name: q.name })} />
 			<button class="btn btn-secondary btn-sm" onclick={openDiagram} title="Schema diagram"><Network />Diagram</button>
 			<button class="btn btn-secondary btn-sm" onclick={openActivity} title="Sessions, locks and sizes"><Activity />Activity</button>
+			<button class="btn btn-secondary btn-sm" onclick={() => openSchema()} title="Schema snapshots and diff"><History />Schema</button>
 			{#if isAdmin()}
 				<button class="btn btn-ghost btn-icon btn-sm" title="Connection settings" onclick={() => (editor.target = conn)}><Settings2 /></button>
 			{/if}
@@ -192,6 +219,8 @@
 								<Network class="size-3.5 shrink-0 opacity-70" /><span class="truncate">Diagram</span>
 							{:else if t.kind === 'activity'}
 								<Activity class="size-3.5 shrink-0 opacity-70" /><span class="truncate">Activity</span>
+							{:else if t.kind === 'schema'}
+								<History class="size-3.5 shrink-0 opacity-70" /><span class="truncate">Schema history</span>
 							{:else}
 								<SquareTerminal class="size-3.5 shrink-0 opacity-70" /><span class="truncate" title={t.saved ? `Saved query: ${t.saved.name}` : undefined}>{t.saved?.name ?? t.title}</span>
 							{/if}
@@ -201,7 +230,7 @@
 						</button>
 					</div>
 				{/each}
-				<button class="mb-1 ml-1 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground" title="New query (⌘K)" onclick={() => openQuery()}>
+				<button class="mb-1 ml-1 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground" title="New query (⌘K ↵)" onclick={() => openQuery()}>
 					<Plus class="size-3.5" />
 				</button>
 			</div>
@@ -231,6 +260,8 @@
 							</div>
 						{:else if t.kind === 'diagram'}
 							<SchemaDiagram connectionId={conn.id} bind:schema={t.schema} onopen={(s, n, k) => openTable(s, n, k)} />
+						{:else if t.kind === 'schema'}
+							<SchemaHistory {conn} bind:composing={composingSnapshot} />
 						{:else if t.kind === 'activity'}
 							<ActivityView connectionId={conn.id} {readOnly} active={t.id === activeId} onopen={(s, n) => openTable(s, n)} />
 						{:else}
