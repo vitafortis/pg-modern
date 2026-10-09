@@ -200,11 +200,12 @@
 						}
 					: undefined
 		};
-		const form = new FormData();
-		form.append('options', JSON.stringify(options));
-		form.append('file', file);
+		// The file is the body; options travel in a header (see the import endpoint).
 		const xhr = new XMLHttpRequest();
 		xhr.open('POST', `/api/connections/${connectionId}/import`);
+		xhr.setRequestHeader('content-type', 'text/csv');
+		xhr.setRequestHeader('x-import-options', encodeURIComponent(JSON.stringify(options)));
+		xhr.setRequestHeader('x-file-name', encodeURIComponent(file.name));
 		xhr.upload.onprogress = (e) => {
 			if (e.lengthComputable) progress = e.loaded / e.total;
 		};
@@ -225,7 +226,7 @@
 			uploading = false;
 			error = 'The upload failed (network error).';
 		};
-		xhr.send(form);
+		xhr.send(file);
 	}
 </script>
 

@@ -34,11 +34,19 @@
 	let text = $state(initialText(value));
 	let error = $state('');
 	let root: HTMLDivElement;
+	// Shifted left when the editor would stick out past the grid's right edge.
+	let shift = $state(0);
 
 	// svelte-ignore state_referenced_locally
 	const multiline = column.kind === 'json' || (typeof value === 'string' && (value.includes('\n') || value.length > 80));
 
 	onMount(() => {
+		const grid = root.closest('[role=grid]');
+		if (grid) {
+			const g = grid.getBoundingClientRect();
+			const r = root.getBoundingClientRect();
+			shift = Math.max(0, Math.min(r.right - g.right + 8, r.left - g.left - 48));
+		}
 		const el = root.querySelector<HTMLElement>('input, textarea, select, button[data-autofocus]');
 		el?.focus();
 		if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) el.select();
@@ -88,7 +96,8 @@
 	{onkeydown}
 	onclick={(e) => e.stopPropagation()}
 	ondblclick={(e) => e.stopPropagation()}
-	class="absolute top-0 left-0 z-20 min-w-full rounded-md border border-primary bg-card p-1 font-sans text-[12px] text-foreground no-underline shadow-surface-lg {multiline ? 'w-96' : 'w-max'}"
+	style="left:{-shift}px"
+	class="absolute top-0 z-20 min-w-full rounded-md border border-primary bg-card p-1 font-sans text-[12px] text-foreground no-underline shadow-surface-lg {multiline ? 'w-96' : 'w-max'}"
 >
 	{#if column.kind === 'boolean'}
 		<div class="flex items-center gap-1">

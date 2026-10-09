@@ -188,7 +188,7 @@ async function mysqlMeta(id: string, schema: string, table: string): Promise<Tab
 			const options = mysqlEnumOptions(type);
 			let kind: EditKind = 'text';
 			if (type === 'json') kind = 'json';
-			else if (/^(tinyint\(1\)|bool|boolean)\b/i.test(type)) kind = 'boolean';
+			else if (/^(tinyint\(1\)( unsigned)?|bool|boolean)$/i.test(type)) kind = 'boolean';
 			else if (MY_NUMBER.test(type)) kind = 'number';
 			else if (MY_DATE.test(type)) kind = 'date';
 			else if (options) kind = 'enum';

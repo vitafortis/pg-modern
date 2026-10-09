@@ -537,7 +537,7 @@
 <Dialog bind:open={reviewOpen} title="Review changes" description="These statements run in one transaction on {schema}.{table}. If any of them fails or finds the row changed since you loaded it, nothing is saved." width="max-w-3xl">
 	<ol class="space-y-1.5">
 		{#each statements as s, i (i)}
-			<li class="rounded-lg border {failure?.index === i ? 'border-danger/50 bg-danger/5' : 'border-border bg-surface'} px-3 py-2 font-mono text-[12px] break-all whitespace-pre-wrap">
+			<li class="rounded-lg border {failure?.index === i ? 'border-danger/50 bg-danger/5' : 'border-border bg-surface'} px-3 py-2 font-mono text-[12px] whitespace-pre-wrap [overflow-wrap:anywhere]">
 				<span class="mr-2 text-muted-foreground select-none">{i + 1}</span>{s};
 			</li>
 		{/each}

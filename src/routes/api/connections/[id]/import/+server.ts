@@ -9,27 +9,49 @@ import { bytes } from '#lib/client/format.ts';
 import { buildDeleteAll } from '#lib/server/rows/sql.ts';
 import type { RequestHandler } from './$types';
 
+/** The request body as text, or null when it's larger than `max` bytes (stops reading there). */
+async function readCapped(request: Request, max: number): Promise<string | null> {
+	if (!request.body) return '';
+	const reader = request.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		size += value.byteLength;
+		if (size > max) {
+			await reader.cancel().catch(() => {});
+			return null;
+		}
+		chunks.push(value);
+	}
+	return Buffer.concat(chunks).toString('utf8');
+}
+
 /**
- * CSV import (multipart: `file` and JSON `options`). All rows go in one transaction;
- * nothing is kept if any row fails.
+ * CSV import: the file is the request body (`text/csv`, not a form post, so it works
+ * behind proxies the same way the JSON API does); options are JSON in the
+ * `x-import-options` header and the file name in `x-file-name` (both URI-encoded).
+ * All rows go in one transaction; nothing is kept if any row fails.
  */
 export const POST: RequestHandler = handler(async ({ params, request, locals }) => {
 	const conn = getConnection(params.id);
 	if (!conn) throw new NotFound('Connection not found');
 	if (readOnlyFor(locals.user, params.id)) return json({ message: 'This connection is read-only for you. Unlock writes to import.' }, { status: 403 });
 	const tooBig = () => json({ message: `The file is larger than the ${bytes(MAX_IMPORT_BYTES)} import limit (PGM_IMPORT_MAX_MB)` }, { status: 413 });
-	if (Number(request.headers.get('content-length') ?? 0) > MAX_IMPORT_BYTES + 1024 * 1024) return tooBig();
+	if (Number(request.headers.get('content-length') ?? 0) > MAX_IMPORT_BYTES) return tooBig();
 
-	const form = await request.formData().catch(() => null);
-	const file = form?.get('file');
-	if (!form || !(file instanceof File)) throw new BadRequest('Upload a CSV file as "file"');
-	if (file.size > MAX_IMPORT_BYTES) return tooBig();
 	let opts;
 	try {
-		opts = parseImportOptions(JSON.parse(String(form.get('options') ?? 'null')));
+		opts = parseImportOptions(JSON.parse(decodeURIComponent(request.headers.get('x-import-options') ?? 'null')));
 	} catch (err) {
-		throw new BadRequest(err instanceof ImportError ? err.message : '"options" must be JSON');
+		throw new BadRequest(err instanceof ImportError ? err.message : 'The "x-import-options" header must be URI-encoded JSON');
 	}
+	let fileName = '';
+	try {
+		fileName = decodeURIComponent(request.headers.get('x-file-name') ?? '').slice(0, 200);
+	} catch {}
+	const file = { name: fileName };
 	const dialect = dialectOf(params.id);
 	if (opts.truncate && opts.create) throw new BadRequest('A new table has nothing to empty');
 	// Emptying the table is destructive: the name has to be typed again, like a confirmation.
@@ -37,8 +59,9 @@ export const POST: RequestHandler = handler(async ({ params, request, locals }) 
 		return json({ message: `Type the table name to confirm deleting every row of ${opts.schema}.${opts.table}`, confirm: [buildDeleteAll(dialect, opts).display] }, { status: 409 });
 	}
 
+	const text = await readCapped(request, MAX_IMPORT_BYTES);
+	if (text === null) return tooBig();
 	try {
-		const text = await file.text();
 		const create = createStatement(dialect, opts);
 		let key: string[] = opts.create?.primaryKey ?? [];
 		let booleanColumns = new Set<string>();

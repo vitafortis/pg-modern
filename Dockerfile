@@ -17,6 +17,8 @@ ENV NODE_ENV=production \
     PORT=3000 \
     PGM_DATA_DIR=/data \
     NODE_OPTIONS=--disable-warning=ExperimentalWarning
+# CSV imports upload up to PGM_IMPORT_MAX_MB (50 MB by default); the server's default body limit is 512 KB.
+ENV BODY_SIZE_LIMIT=64M
 COPY --from=build /app/build ./build
 COPY --from=build /app/node_modules ./node_modules
 COPY package.json ./
