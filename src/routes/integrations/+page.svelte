@@ -16,7 +16,9 @@
 		X,
 		Zap
 	} from '@lucide/svelte';
+	import { Gauge } from '@lucide/svelte';
 	import PageHeader from '#lib/components/PageHeader.svelte';
+	import ApiTokens from '#lib/components/ApiTokens.svelte';
 	import Switch from '#lib/components/Switch.svelte';
 	import { api, errorMessage } from '#lib/client/api.ts';
 	import { toast } from '#lib/client/state.svelte.ts';
@@ -475,5 +477,15 @@
 				</form>
 			</section>
 		</div>
+
+		<!-- Status API tokens -->
+		<section id="tokens" class="card scroll-mt-6 p-5">
+			<h2 class="flex items-center gap-2 text-[14px] font-semibold"><Gauge class="size-4 text-primary" />Status API tokens</h2>
+			<p class="mt-1 max-w-2xl text-xs text-muted-foreground">
+				Read-only tokens for dashboards and monitors — Homepage, Glance, Uptime Kuma, Home Assistant. They only open
+				<code class="font-mono">GET /api/status</code> (up/down, latency, size and version of each connection) and nothing else.
+			</p>
+			<ApiTokens />
+		</section>
 	</div>
 </div>

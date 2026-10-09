@@ -28,6 +28,9 @@
 - **Backup & restore**: an encrypted, passphrase-protected file with connections, users and settings that restores on a fresh install.
 - **Users and SSO**: sign in with any OIDC provider (Authentik, Authelia, Keycloak, Pocket ID, Google, …). Accounts can be created automatically for matching emails. *Admins* manage everything; *viewers* browse and query read-only.
 - **Schema diagram**: an ER view of each schema (each database, on MySQL) built from its foreign keys.
+- **Schema history and diff**: snapshot a schema (tables, columns, keys, indexes, views, functions, triggers, types, extensions) before an upgrade, then compare any two of: a snapshot, the live schema, or another connection's schema on the same engine. Changes are grouped by object type, with column-level detail, text diffs of view and function definitions, and a best-effort draft migration. Optionally, pg·modern checks the schema every 6 hours and stores a snapshot when it changed, so app upgrades show up in the timeline.
+- **Command palette**: `⌘K` (`Ctrl+K` on Linux/Windows) searches connections, tables and views, pages, saved queries and actions from anywhere.
+- **Status API for dashboards**: read-only API tokens for Homepage, Glance, Uptime Kuma and Home Assistant (see [Dashboards and monitoring](#dashboards-and-monitoring)).
 - **Light and dark** themes, and multi-arch images (`amd64`, `arm64`).
 
 ## Getting started
@@ -146,6 +149,112 @@ Emails the provider marks as unverified are rejected. An email that's already li
 
 Behind a reverse proxy, set `PROTOCOL_HEADER` and `HOST_HEADER` so the callback URL is built with your public address, or set a redirect URI override under **Advanced**.
 
+## Schema history
+
+Open a connection and click **Schema** (or `⌘K` → *Schema history*).
+
+- **Snapshot** stores the current schema with a label and an optional note. Anyone who can see the connection can take one; the author or an admin can delete it. Snapshots are capped at 5 MB (function bodies are dropped first, keeping their hashes) and the last 50 per connection are kept.
+- **Compare** any two sides: a snapshot or the live schema, of this connection or another connection on the same engine (e.g. staging vs production). Renames show up as a removal plus an addition.
+- **Draft migration SQL** covers the simple cases (new tables, added columns, nullability, defaults, indexes, views, functions). Drops are left commented out, and everything else is listed to handle by hand. It never runs on its own.
+- **Auto snapshot on change** (admins, per connection): every 6 hours the schema is read and hashed; when the hash differs from the latest snapshot, a new snapshot is stored. **Check now** runs the check on demand.
+
+Postgres snapshots skip objects owned by extensions (they're covered by the extension's version) and partitions. MySQL/MariaDB snapshots cover every database the account can see, except the system ones.
+
+## Command palette
+
+Press `⌘K` on macOS or `Ctrl+K` elsewhere. Type to fuzzy-search connections, pages, tables and views (from the open connection and recently opened ones; cached for 5 minutes), saved queries, and actions (new query, schema history, snapshot, new connection, theme, sidebar, lock writes, sign out). Recently used items come first. Use `↑`/`↓` and `↵`.
+
+`⌘K` used to open a new query tab in a connection; now **New query** is the first item there, so `⌘K` `↵` does the same. The SQL editor doesn't bind `⌘K`; on macOS, `Ctrl+K` stays the editor's "delete to end of line".
+
+## Dashboards and monitoring
+
+Create a token under **Integrations → Status API tokens** (admins). It's shown once; only its SHA-256 is stored. Tokens can expire, can be revoked, and record when they were last used. They open these routes only, and only for `GET`. They're never accepted as a session anywhere else.
+
+| Route | Returns |
+| --- | --- |
+| `GET /api/status` | `{ connections, online, offline, checkedAt, items: [...] }` |
+| `GET /api/status/<id>` | one item; add `?strict=1` to get HTTP 503 while it's down |
+| `GET /api/status/badge/<id>.svg` | a shields-style badge (`?label=` sets the left text) |
+
+Each item has `id`, `name`, `engine`, `flavor`, `status` (`up` / `down`), `latencyMs`, `sizeBytes`, `version`, `lastCheckedAt` and, when down, a short `error` code such as `ECONNREFUSED`. Host, port and database name are included only if the token was created with **Include addresses**. Results are cached for 30 seconds, so frequent polling doesn't load your databases. Connection ids are in the `/api/status` output and in the URL of each connection (`/c/<id>`).
+
+Send the token as `Authorization: Bearer pgm_…`. Widgets that can't set headers can use `?token=pgm_…`. URLs end up in reverse-proxy logs and browser history, so prefer the header, and give such a widget its own token that you can revoke on its own.
+
+```sh
+curl -H "Authorization: Bearer $PGM_TOKEN" http://pg-modern.lan:3030/api/status
+```
+
+**[Homepage](https://gethomepage.dev)** (`services.yaml`, customapi widget):
+
+```yaml
+- Databases:
+    - pg·modern:
+        href: http://pg-modern.lan:3030
+        widget:
+          type: customapi
+          url: http://pg-modern.lan:3030/api/status
+          refreshInterval: 60000
+          headers:
+            Authorization: Bearer pgm_xxxxxxxx
+          mappings:
+            - field: online
+              label: Online
+            - field: offline
+              label: Offline
+            - field: connections
+              label: Total
+```
+
+**[Glance](https://github.com/glanceapp/glance)** (custom-api widget):
+
+```yaml
+- type: custom-api
+  title: Databases
+  cache: 1m
+  url: http://pg-modern.lan:3030/api/status
+  headers:
+    Authorization: Bearer pgm_xxxxxxxx
+  template: |
+    <ul class="list list-gap-10">
+    {{ range .JSON.Array "items" }}
+      <li class="flex justify-between">
+        <span>{{ .String "name" }}</span>
+        {{ if eq (.String "status") "up" }}
+          <span class="color-positive">up · {{ .Int "latencyMs" }} ms</span>
+        {{ else }}
+          <span class="color-negative">down</span>
+        {{ end }}
+      </li>
+    {{ end }}
+    </ul>
+```
+
+**[Uptime Kuma](https://github.com/louislam/uptime-kuma)**: add an *HTTP(s) - Json Query* monitor for `http://pg-modern.lan:3030/api/status/<id>` with the header `{"Authorization": "Bearer pgm_xxxxxxxx"}`, JSON query `status` and expected value `up`. Or use an *HTTP(s) - Keyword* monitor with keyword `"status":"up"`, or a plain *HTTP(s)* monitor on `…/api/status/<id>?strict=1`, which answers 503 while the database is down.
+
+**[Home Assistant](https://www.home-assistant.io/integrations/rest/)** (`configuration.yaml`):
+
+```yaml
+rest:
+  - resource: http://pg-modern.lan:3030/api/status
+    scan_interval: 60
+    headers:
+      Authorization: !secret pgm_status_token   # "Bearer pgm_xxxxxxxx"
+    sensor:
+      - name: Databases online
+        value_template: "{{ value_json.online }}"
+        unit_of_measurement: databases
+      - name: Databases offline
+        value_template: "{{ value_json.offline }}"
+        unit_of_measurement: databases
+    binary_sensor:
+      - name: Nextcloud database
+        device_class: connectivity
+        value_template: >
+          {{ (value_json['items'] | selectattr('name', 'eq', 'Nextcloud') | map(attribute='status') | first) == 'up' }}
+```
+
+**Badge** in a wiki or dashboard (image tags can't send headers, so use a dedicated token): `![db](http://pg-modern.lan:3030/api/status/badge/<id>.svg?token=pgm_xxxxxxxx)`.
+
 ## Images
 
 Images are published to the GitHub Container Registry for `linux/amd64` and `linux/arm64`:
@@ -251,6 +360,7 @@ The file is encrypted with a passphrase you choose (12+ characters), not the mas
 - **Postgres-only features**: the visual EXPLAIN tree (MySQL/MariaDB show the server's text or JSON plan instead, and `EXPLAIN ANALYZE` there is limited to reads), and dead tuple / vacuum / per-index scan statistics and extensions in the overview and Activity tab.
 - **Writes** need a read/write connection or a temporary unlock, which uses a separate session pool and expires on its own. `DROP`, `TRUNCATE`, and `DELETE` / `UPDATE` without a `WHERE` must be confirmed; the server enforces this, not just the UI.
 - **Access** is checked on the server for every connection-scoped page and API call; connections a viewer wasn't given don't exist as far as they can tell.
+- **API tokens** (`pgm_` + 32 random bytes, SHA-256 hashed at rest) only work on `GET /api/status…`; hooks.server.ts checks them there and nowhere else, they never become sessions, and repeated bad tokens from one address are throttled. Status responses omit hosts unless the token allows it, and report errors as codes only.
 - **Sign-in** is by OIDC or by local accounts (scrypt-hashed passwords, login throttle). Sessions are httpOnly cookies tied to a user. Cross-origin API writes are rejected. Viewers are forced read-only on the server, not just hidden from buttons in the UI.
 
 ## Development
