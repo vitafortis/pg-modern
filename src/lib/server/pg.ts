@@ -2,7 +2,7 @@ import pg from 'pg';
 import Cursor from 'pg-cursor';
 import { config } from './config.ts';
 import { getConnection, getPassword, touchConnection } from './store.ts';
-import { escapesReadOnly, returnsRows, splitStatements } from './sql.ts';
+import { escapesReadOnly, returnsRows, splitStatements, stripComments } from './sql.ts';
 import type { Connection, QueryError, QueryField, QueryResult, SslMode } from '#lib/types.ts';
 
 const { Pool, types: pgTypes } = pg;
@@ -205,21 +205,23 @@ type RawField = { name: string; dataTypeID: number };
 
 /**
  * Runs `fn` on a pooled client. With `readOnly`, everything happens inside a
- * READ ONLY transaction that is always rolled back.
+ * READ ONLY transaction that is always rolled back. `rollbackOnly` does the same
+ * on a writable client: a plain transaction that is never committed.
  */
 export async function withClient<T>(
 	id: string,
-	opts: { readOnly: boolean; timeoutMs?: number },
+	opts: { readOnly: boolean; timeoutMs?: number; rollbackOnly?: boolean },
 	fn: (client: pg.PoolClient, entry: PoolEntry) => Promise<T>
 ): Promise<T> {
 	// Callers decide the mode (see permissions.ts); read-only is the default for everything else.
 	const entry = await entryFor(id, !opts.readOnly);
 	const readOnly = opts.readOnly;
+	const rollback = readOnly || opts.rollbackOnly === true;
 	const client = await entry.pool.connect();
 	let broken = false;
 	try {
-		if (readOnly) {
-			await client.query('BEGIN TRANSACTION READ ONLY');
+		if (rollback) {
+			await client.query(readOnly ? 'BEGIN TRANSACTION READ ONLY' : 'BEGIN');
 			await client.query(`SET LOCAL statement_timeout = ${Math.floor(opts.timeoutMs ?? config.statementTimeoutMs)}`);
 		} else {
 			await client.query(`SET statement_timeout = ${Math.floor(opts.timeoutMs ?? config.statementTimeoutMs)}`);
@@ -229,7 +231,7 @@ export async function withClient<T>(
 		broken = !(err instanceof Error && 'code' in err); // non-server errors may leave the socket unusable
 		throw err;
 	} finally {
-		if (readOnly) await client.query('ROLLBACK').catch(() => (broken = true));
+		if (rollback) await client.query('ROLLBACK').catch(() => (broken = true));
 		client.release(broken);
 	}
 }
@@ -358,6 +360,85 @@ export async function runScript(
 			if (opts.runId) running.delete(opts.runId);
 		}
 		return outcome;
+	});
+}
+
+export interface ExplainOutcome {
+	/** EXPLAIN's JSON output (an array with one element). */
+	plan: unknown;
+	analyzed: boolean;
+	/** Ran in a READ ONLY transaction. */
+	readOnly: boolean;
+	/** ANALYZE executed a data-modifying statement inside a transaction that was rolled back. */
+	executedWrite: boolean;
+	durationMs: number;
+}
+
+/** Statements whose EXPLAIN ANALYZE changes data (it executes them). Errs on the side of "yes". */
+export function modifiesData(sql: string): boolean {
+	const s = stripComments(sql).trim().toLowerCase();
+	if (!/^(select|values|table|with|\()/.test(s)) return true;
+	return /\b(insert|update|delete|merge)\b/.test(s) || /^select\b[^;]*?\binto\b/.test(s);
+}
+
+/** Why a statement can't be explained, if it can't (checked again by `explainStatement`). */
+export function explainProblem(sql: string): string | null {
+	const statements = splitStatements(sql);
+	if (statements.length === 0) return 'Nothing to explain.';
+	if (statements.length > 1) return 'Explain one statement at a time.';
+	if (escapesReadOnly(statements[0])) return 'Transaction and session control statements can’t be explained.';
+	if (/^explain\b/i.test(stripComments(statements[0]).trim())) return 'Leave out EXPLAIN — use Explain or Explain analyze instead.';
+	return null;
+}
+
+/**
+ * EXPLAINs a single statement. It always runs in a transaction that is rolled back:
+ * READ ONLY unless the user has write access and asked to ANALYZE a write, which is
+ * then really executed and undone (side effects outside the transaction, like
+ * sequence increments, stay).
+ */
+export async function explainStatement(
+	id: string,
+	sql: string,
+	opts: { analyze: boolean; readOnly: boolean; runId?: string }
+): Promise<ExplainOutcome> {
+	const problem = explainProblem(sql);
+	if (problem) throw new Error(problem);
+	const statement = splitStatements(sql)[0];
+
+	const options = ['FORMAT JSON', 'VERBOSE', 'COSTS', 'SETTINGS'];
+	if (opts.analyze) options.push('ANALYZE', 'BUFFERS', 'TIMING');
+	const executedWrite = opts.analyze && !opts.readOnly && modifiesData(statement);
+	// Only an ANALYZE of a write needs a writable transaction; everything else stays READ ONLY.
+	const readOnly = !executedWrite;
+	const started = performance.now();
+	return withClient(id, { readOnly, rollbackOnly: true }, async (client) => {
+		const pid = (client as unknown as { processID?: number }).processID;
+		if (opts.runId && pid) running.set(opts.runId, pid);
+		try {
+			const prefix = `EXPLAIN (${options.join(', ')}) `;
+			let result: pg.QueryResult;
+			try {
+				// Extended protocol: one statement only, so nothing can follow and COMMIT.
+				result = await client.query({ text: prefix + statement, queryMode: 'extended' } as pg.QueryConfig);
+			} catch (err) {
+				// Point error positions at the user's statement, not our EXPLAIN prefix.
+				const e = err as pg.DatabaseError;
+				if (e?.position && Number(e.position) > prefix.length) e.position = String(Number(e.position) - prefix.length);
+				else if (e?.position) e.position = undefined;
+				throw err;
+			}
+			const cell = result.rows[0]?.['QUERY PLAN'];
+			return {
+				plan: typeof cell === 'string' ? JSON.parse(cell) : cell,
+				analyzed: opts.analyze,
+				readOnly,
+				executedWrite,
+				durationMs: Math.round((performance.now() - started) * 10) / 10
+			};
+		} finally {
+			if (opts.runId) running.delete(opts.runId);
+		}
 	});
 }
 

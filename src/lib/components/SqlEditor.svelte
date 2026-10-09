@@ -12,12 +12,18 @@
 	let {
 		value = $bindable(''),
 		schema = {},
-		onrun
+		onrun,
+		onsave,
+		onexplain
 	}: {
 		value: string;
 		schema?: Record<string, Record<string, string[]>>;
 		/** Called with the selection, the statement under the cursor, or (`all`) the whole buffer. */
 		onrun: (sql: string, scope: 'selection' | 'statement' | 'all') => void;
+		/** ⌘S / Ctrl+S. */
+		onsave?: () => void;
+		/** Called with the selection or the statement under the cursor (⌥⌘↵ analyzes). */
+		onexplain?: (sql: string, analyze: boolean) => void;
 	} = $props();
 
 	let host: HTMLDivElement;
@@ -59,17 +65,33 @@
 
 	const sqlLang = (s: typeof schema) => sql({ dialect: PostgreSQL, schema: s, defaultSchema: 'public', upperCaseKeywords: false });
 
-	function run(scope: 'statement' | 'all') {
+	/** The selection, or else the statement under the cursor. */
+	function current(): { text: string; scope: 'selection' | 'statement' } | null {
 		const state = view.state;
-		const doc = state.doc.toString();
 		const sel = state.selection.main;
-		if (scope === 'all') onrun(doc, 'all');
-		else if (!sel.empty) onrun(state.sliceDoc(sel.from, sel.to), 'selection');
+		if (!sel.empty) return { text: state.sliceDoc(sel.from, sel.to), scope: 'selection' };
+		const stmt = statementAt(state.doc.toString(), sel.head);
+		return stmt ? { text: stmt.text, scope: 'statement' } : null;
+	}
+
+	function run(scope: 'statement' | 'all') {
+		if (scope === 'all') onrun(view.state.doc.toString(), 'all');
 		else {
-			const stmt = statementAt(doc, sel.head);
-			if (stmt) onrun(stmt.text, 'statement');
+			const c = current();
+			if (c) onrun(c.text, c.scope);
 		}
 		return true;
+	}
+
+	function explain(analyze: boolean) {
+		const c = current();
+		if (c && onexplain) onexplain(c.text, analyze);
+		return true;
+	}
+
+	/** Explains the statement under the cursor (or the selection) — for the toolbar button. */
+	export function explainCurrent(analyze = false) {
+		explain(analyze);
 	}
 
 	/** Runs the statement under the cursor (or the selection) — exposed for the toolbar button. */
@@ -105,7 +127,16 @@
 					Prec.highest(
 						keymap.of([
 							{ key: 'Mod-Enter', run: () => run('statement') },
-							{ key: 'Shift-Mod-Enter', run: () => run('all') }
+							{ key: 'Shift-Mod-Enter', run: () => run('all') },
+							{ key: 'Alt-Mod-Enter', run: () => explain(true) },
+							{
+								key: 'Mod-s',
+								run: () => {
+									onsave?.();
+									return true;
+								},
+								preventDefault: true
+							}
 						])
 					),
 					keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, ...completionKeymap, indentWithTab]),

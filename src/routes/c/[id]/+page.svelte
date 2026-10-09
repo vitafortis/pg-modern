@@ -9,6 +9,8 @@
 	import ServerOverview from '#lib/components/ServerOverview.svelte';
 	import WriteAccess from '#lib/components/WriteAccess.svelte';
 	import SchemaDiagram from '#lib/components/SchemaDiagram.svelte';
+	import SavedQueriesMenu from '#lib/components/SavedQueriesMenu.svelte';
+	import { loadSaved } from '#lib/client/saved.svelte.ts';
 	import { api, errorMessage } from '#lib/client/api.ts';
 	import { COLORS } from '#lib/client/format.ts';
 	import { connections, editor, isAdmin, toast } from '#lib/client/state.svelte.ts';
@@ -18,7 +20,7 @@
 	type Tab =
 		| { id: string; kind: 'overview' }
 		| { id: string; kind: 'table'; schema: string; table: string; relKind: RelationSummary['kind']; view: 'data' | 'structure' }
-		| { id: string; kind: 'query'; title: string; sql: string }
+		| { id: string; kind: 'query'; title: string; sql: string; saved?: { id: string; name: string } | null }
 		| { id: string; kind: 'diagram'; schema: string };
 
 	let { data }: PageProps = $props();
@@ -87,6 +89,10 @@
 		void data.connection.id;
 		untrack(loadCompletion);
 	});
+	$effect(() => {
+		const id = data.connection.id;
+		untrack(() => loadSaved(id).catch(() => {}));
+	});
 
 	function openTable(schema: string, table: string, relKind: RelationSummary['kind'] = 'table') {
 		const id = `t:${schema}.${table}`;
@@ -94,9 +100,9 @@
 		activeId = id;
 	}
 
-	function openQuery(sql = '') {
+	function openQuery(sql = '', saved: { id: string; name: string } | null = null) {
 		const id = `q:${crypto.randomUUID().slice(0, 8)}`;
-		tabs.push({ id, kind: 'query', title: `Query ${queryCounter++}`, sql });
+		tabs.push({ id, kind: 'query', title: `Query ${queryCounter++}`, sql, saved });
 		activeId = id;
 	}
 
@@ -138,6 +144,7 @@
 		<WriteAccess {conn} />
 		<div class="ml-auto flex items-center gap-1.5">
 			<button class="btn btn-secondary btn-sm" onclick={() => openQuery()} title="New query (⌘K)"><SquareTerminal />New query</button>
+			<SavedQueriesMenu connectionId={conn.id} onopen={(q) => openQuery(q.sql, { id: q.id, name: q.name })} />
 			<button class="btn btn-secondary btn-sm" onclick={openDiagram} title="Schema diagram"><Network />Diagram</button>
 			{#if isAdmin()}
 				<button class="btn btn-ghost btn-icon btn-sm" title="Connection settings" onclick={() => (editor.target = conn)}><Settings2 /></button>
@@ -169,7 +176,7 @@
 							{:else if t.kind === 'diagram'}
 								<Network class="size-3.5 shrink-0 opacity-70" /><span class="truncate">Diagram</span>
 							{:else}
-								<SquareTerminal class="size-3.5 shrink-0 opacity-70" /><span class="truncate">{t.title}</span>
+								<SquareTerminal class="size-3.5 shrink-0 opacity-70" /><span class="truncate" title={t.saved ? `Saved query: ${t.saved.name}` : undefined}>{t.saved?.name ?? t.title}</span>
 							{/if}
 						</button>
 						<button class="rounded p-0.5 opacity-0 group-hover:opacity-100 hover:bg-accent {isActive ? 'opacity-60' : ''}" aria-label="Close tab" onclick={() => close(t.id)}>
@@ -208,7 +215,7 @@
 						{:else if t.kind === 'diagram'}
 							<SchemaDiagram connectionId={conn.id} bind:schema={t.schema} onopen={(s, n, k) => openTable(s, n, k)} />
 						{:else}
-							<QueryView connectionId={conn.id} {readOnly} bind:sql={t.sql} {completion} />
+							<QueryView connectionId={conn.id} {readOnly} bind:sql={t.sql} {completion} connectionName={conn.name} bind:savedQuery={t.saved} />
 						{/if}
 					</div>
 				{/each}

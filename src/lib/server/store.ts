@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { config } from './config.ts';
 import { decrypt, encrypt } from './crypto.ts';
 import type { AuditEvent, Connection, ConnectionInput, Grant, HistoryEntry, Role, Settings, User } from '#lib/types.ts';
+import type { SavedQuery } from '#lib/types.ts';
 
 let handle: DatabaseSync | undefined;
 
@@ -71,6 +72,7 @@ function db(): DatabaseSync {
 		CREATE INDEX IF NOT EXISTS history_conn ON history(connection_id, id DESC);
 	`);
 	migrate(handle);
+	migrateSavedQueries(handle);
 	return handle;
 }
 
@@ -582,4 +584,94 @@ export function unlockedUntil(userId: string, connectionId: string): number | nu
 	db().prepare('DELETE FROM write_unlocks WHERE expires_at < ?').run(Date.now());
 	const r = db().prepare('SELECT expires_at FROM write_unlocks WHERE user_id = ? AND connection_id = ?').get(userId, connectionId) as Row | undefined;
 	return r ? (r.expires_at as number) : null;
+}
+
+// --- saved queries -----------------------------------------------------------
+
+function migrateSavedQueries(h: DatabaseSync) {
+	h.exec(`
+		-- Named queries. A NULL connection_id means "usable on any connection".
+		CREATE TABLE IF NOT EXISTS saved_queries (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT,
+			sql TEXT NOT NULL,
+			connection_id TEXT REFERENCES connections(id) ON DELETE CASCADE,
+			owner_id TEXT NOT NULL,
+			owner_email TEXT NOT NULL,
+			shared INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS saved_queries_conn ON saved_queries(connection_id);
+		CREATE INDEX IF NOT EXISTS saved_queries_owner ON saved_queries(owner_id);
+	`);
+}
+
+function toSavedQuery(r: Row): SavedQuery {
+	return {
+		id: r.id as string,
+		name: r.name as string,
+		description: (r.description as string) ?? null,
+		sql: r.sql as string,
+		connectionId: (r.connection_id as string) ?? null,
+		ownerId: r.owner_id as string,
+		ownerEmail: r.owner_email as string,
+		shared: r.shared === 1,
+		createdAt: r.created_at as string,
+		updatedAt: r.updated_at as string
+	};
+}
+
+/**
+ * The user's own queries plus everyone's shared ones. With `connectionId`, only those
+ * for that connection or for any connection; otherwise all of them (callers filter
+ * by which connections the user can see).
+ */
+export function listSavedQueries(userId: string, connectionId?: string): SavedQuery[] {
+	const rows = connectionId
+		? db()
+				.prepare(
+					`SELECT * FROM saved_queries WHERE (owner_id = ? OR shared = 1) AND (connection_id IS NULL OR connection_id = ?)
+					 ORDER BY name COLLATE NOCASE`
+				)
+				.all(userId, connectionId)
+		: db().prepare('SELECT * FROM saved_queries WHERE owner_id = ? OR shared = 1 ORDER BY name COLLATE NOCASE').all(userId);
+	return (rows as Row[]).map(toSavedQuery);
+}
+
+export function getSavedQuery(id: string): SavedQuery | undefined {
+	const row = db().prepare('SELECT * FROM saved_queries WHERE id = ?').get(id) as Row | undefined;
+	return row && toSavedQuery(row);
+}
+
+export interface SavedQueryInput {
+	name: string;
+	description: string | null;
+	sql: string;
+	connectionId: string | null;
+	shared: boolean;
+}
+
+export function createSavedQuery(owner: { id: string; email: string }, input: SavedQueryInput): SavedQuery {
+	const id = randomUUID();
+	const now = new Date().toISOString();
+	db()
+		.prepare(
+			`INSERT INTO saved_queries (id, name, description, sql, connection_id, owner_id, owner_email, shared, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		)
+		.run(id, input.name, input.description, input.sql, input.connectionId, owner.id, owner.email, input.shared ? 1 : 0, now, now);
+	return getSavedQuery(id)!;
+}
+
+export function updateSavedQuery(id: string, input: SavedQueryInput): SavedQuery | undefined {
+	db()
+		.prepare('UPDATE saved_queries SET name = ?, description = ?, sql = ?, connection_id = ?, shared = ?, updated_at = ? WHERE id = ?')
+		.run(input.name, input.description, input.sql, input.connectionId, input.shared ? 1 : 0, new Date().toISOString(), id);
+	return getSavedQuery(id);
+}
+
+export function deleteSavedQuery(id: string): boolean {
+	return Number(db().prepare('DELETE FROM saved_queries WHERE id = ?').run(id).changes) > 0;
 }

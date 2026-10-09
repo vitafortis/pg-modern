@@ -1,15 +1,20 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { CircleAlert, CircleCheck, Download, History, LoaderCircle, Lock, Play, PencilLine, Square, ListVideo, Trash2, Braces } from '@lucide/svelte';
+	import { Bookmark, ChevronDown, Save, Workflow, Gauge } from '@lucide/svelte';
 	import SqlEditor from './SqlEditor.svelte';
 	import DataGrid, { type SelectedCell } from './DataGrid.svelte';
 	import CellInspector from './CellInspector.svelte';
 	import Dialog from './Dialog.svelte';
+	import PlanView from './PlanView.svelte';
+	import SavedQueries from './SavedQueries.svelte';
+	import SaveQueryDialog from './SaveQueryDialog.svelte';
 	import { api, ApiError, errorMessage } from '#lib/client/api.ts';
 	import { ago, csv, download, duration, int } from '#lib/client/format.ts';
 	import { splitRanges } from '#lib/sql-split.ts';
-	import type { HistoryEntry, QueryError, QueryResult } from '#lib/types.ts';
-	import { session } from '#lib/client/state.svelte.ts';
+	import type { HistoryEntry, QueryError, QueryResult, SavedQuery } from '#lib/types.ts';
+	import { confirmAction, session } from '#lib/client/state.svelte.ts';
+	import { loadSaved, saved as savedStore } from '#lib/client/saved.svelte.ts';
 
 	type Outcome = {
 		results: (QueryResult & { sql: string })[];
@@ -20,12 +25,17 @@
 		connectionId,
 		readOnly,
 		sql = $bindable(''),
-		completion
+		completion,
+		connectionName = '',
+		savedQuery = $bindable()
 	}: {
 		connectionId: string;
 		readOnly: boolean;
 		sql: string;
 		completion: Record<string, Record<string, string[]>>;
+		connectionName?: string;
+		/** The saved query this tab was opened from or saved as; Save updates it. */
+		savedQuery?: { id: string; name: string } | null;
 	} = $props();
 
 	let editor: SqlEditor;
@@ -35,10 +45,23 @@
 	let runId = $state<string | null>(null);
 	let elapsed = $state(0);
 	let selected = $state<SelectedCell | null>(null);
-	let showHistory = $state(false);
+	let panel = $state<'history' | 'saved' | null>(null);
 	let history = $state<HistoryEntry[]>([]);
 	let pending = $state<string | null>(null);
 	let split = $state(42);
+
+	type PlanOutcome = { plan: unknown; analyzed: boolean; executedWrite: boolean; readOnly: boolean };
+	let planResult = $state<PlanOutcome | null>(null);
+	let planError = $state<(QueryError & { sql: string; statementIndex: number }) | null>(null);
+	/** Which result area is showing: the query results or the EXPLAIN plan. */
+	let view = $state<'results' | 'plan'>('results');
+	let explainMenu = $state(false);
+	let explainMenuEl = $state<HTMLElement>();
+	let saveOpen = $state(false);
+	let saveMode = $state<'save' | 'edit'>('save');
+	let saveTarget = $state<SavedQuery | null>(null);
+
+	const savedRecord = $derived(savedQuery ? (savedStore.list.find((q) => q.id === savedQuery!.id) ?? null) : null);
 
 	const DESTRUCTIVE = /^\s*(drop|truncate)\b|^\s*(delete|update)\b(?![\s\S]*\bwhere\b)/i;
 
@@ -65,16 +88,80 @@
 		try {
 			outcome = await api.post<Outcome>(`/api/connections/${connectionId}/query`, { sql: text, runId, confirmed });
 			active = Math.max(0, outcome.results.length - 1);
+			view = 'results';
 		} catch (err) {
 			// The server's own check caught something destructive; ask, then resend confirmed.
 			if (err instanceof ApiError && err.status === 409 && err.detail && 'confirm' in err.detail) pending = text;
 			else outcome = { results: [], error: { message: errorMessage(err), statementIndex: 0, sql: text } };
+			view = 'results';
 		} finally {
 			clearInterval(timer);
 			running = false;
 			runId = null;
-			if (showHistory) loadHistory();
+			if (panel === 'history') loadHistory();
 		}
+	}
+
+	/** Statements EXPLAIN ANALYZE would really execute (mirrors the server's `modifiesData`). */
+	function modifiesData(text: string) {
+		const s = stripComments(text).trim().toLowerCase();
+		if (!/^(select|values|table|with|\()/.test(s)) return true;
+		return /\b(insert|update|delete|merge)\b/.test(s) || /^select\b[^;]*?\binto\b/.test(s);
+	}
+
+	async function explain(text: string, analyze: boolean) {
+		explainMenu = false;
+		if (!text.trim() || running) return;
+		if (analyze && !readOnly && modifiesData(text)) {
+			const ok = await confirmAction({
+				title: 'Explain analyze a write?',
+				body: 'EXPLAIN ANALYZE really executes the statement, then rolls it back. Sequence increments and other side effects outside the transaction are not undone.',
+				detail: text,
+				confirmLabel: 'Execute and roll back',
+				danger: true
+			});
+			if (!ok) return;
+		}
+		running = true;
+		runId = crypto.randomUUID();
+		const started = performance.now();
+		const timer = setInterval(() => (elapsed = performance.now() - started), 100);
+		try {
+			planResult = await api.post<PlanOutcome>(`/api/connections/${connectionId}/explain`, { sql: text, analyze, runId });
+			planError = null;
+		} catch (err) {
+			const detail = err instanceof ApiError ? err.detail : undefined;
+			planError = { ...(detail ?? {}), message: errorMessage(err), statementIndex: 0, sql: text };
+			planResult = null;
+		} finally {
+			clearInterval(timer);
+			running = false;
+			runId = null;
+			view = 'plan';
+			if (panel === 'history') loadHistory();
+		}
+	}
+
+	function togglePanel(which: 'history' | 'saved') {
+		panel = panel === which ? null : which;
+		if (panel === 'history') loadHistory();
+		if (panel === 'saved') loadSaved(connectionId).catch(() => {});
+	}
+
+	function openSave() {
+		saveMode = 'save';
+		saveTarget = savedRecord;
+		saveOpen = true;
+	}
+
+	function onsaved(q: SavedQuery) {
+		if (saveMode === 'save' || q.id === savedQuery?.id) savedQuery = { id: q.id, name: q.name };
+	}
+
+	function loadSavedQuery(q: SavedQuery) {
+		sql = q.sql;
+		savedQuery = { id: q.id, name: q.name };
+		editor.focus();
 	}
 
 	async function cancel() {
@@ -116,6 +203,11 @@
 	const fields = $derived(result?.fields.map((f) => ({ name: f.name, type: f.type })) ?? []);
 </script>
 
+<svelte:window
+	onclick={(e) => explainMenu && !explainMenuEl?.contains(e.target as Node) && (explainMenu = false)}
+	onkeydown={(e) => explainMenu && e.key === 'Escape' && (explainMenu = false)}
+/>
+
 <div class="flex h-full flex-col">
 	<div class="flex items-center gap-2 border-b border-border px-3 py-2">
 		{#if running}
@@ -124,6 +216,36 @@
 		{:else}
 			<button class="btn btn-primary btn-sm" onclick={() => editor.runCurrent()} title="Run statement under cursor or selection"><Play />Run<span class="kbd ml-1 border-white/20 bg-white/10 text-white/80">⌘↵</span></button>
 			<button class="btn btn-secondary btn-sm" onclick={() => editor.runAll()} title="Run every statement"><ListVideo />Run all<span class="kbd ml-1">⇧⌘↵</span></button>
+			<div class="relative flex" bind:this={explainMenuEl}>
+				<button class="btn btn-secondary btn-sm rounded-r-none" onclick={() => editor.explainCurrent(false)} title="EXPLAIN the statement under the cursor (estimates only)"><Workflow />Explain</button>
+				<button
+					class="btn btn-secondary btn-sm btn-icon -ml-px w-6 rounded-l-none"
+					onclick={() => (explainMenu = !explainMenu)}
+					aria-label="More explain options"
+					aria-expanded={explainMenu}
+					aria-haspopup="menu"><ChevronDown /></button
+				>
+				{#if explainMenu}
+					<div class="absolute top-full left-0 z-30 mt-1 w-72 rounded-xl border border-border bg-card p-1 shadow-surface-lg" role="menu">
+						<button class="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-accent" role="menuitem" onclick={() => editor.explainCurrent(false)}>
+							<Workflow class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+							<span class="min-w-0 flex-1">
+								<span class="block text-[13px] font-medium">Explain</span>
+								<span class="block text-[11px] text-muted-foreground">The planner’s estimates. Doesn’t run the query.</span>
+							</span>
+						</button>
+						<button class="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-accent" role="menuitem" onclick={() => editor.explainCurrent(true)}>
+							<Gauge class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+							<span class="min-w-0 flex-1">
+								<span class="flex items-center justify-between text-[13px] font-medium">Explain analyze <span class="kbd">⌥⌘↵</span></span>
+								<span class="block text-[11px] text-muted-foreground">
+									Runs it for real timings, then rolls back.{#if !readOnly}<span class="text-warning"> Writes are executed and undone — sequences and other side effects stay.</span>{/if}
+								</span>
+							</span>
+						</button>
+					</div>
+				{/if}
+			</div>
 		{/if}
 		<div class="ml-auto flex items-center gap-1.5">
 			{#if readOnly}
@@ -131,13 +253,9 @@
 			{:else}
 				<span class="badge badge-warning"><PencilLine />Writes enabled</span>
 			{/if}
-			<button
-				class="btn btn-sm {showHistory ? 'btn-secondary' : 'btn-ghost'}"
-				onclick={() => {
-					showHistory = !showHistory;
-					if (showHistory) loadHistory();
-				}}
-			>
+			<button class="btn btn-ghost btn-sm" onclick={openSave} title={savedRecord?.canEdit ? `Update “${savedRecord.name}” (⌘S)` : 'Save this query (⌘S)'}><Save />Save</button>
+			<button class="btn btn-sm {panel === 'saved' ? 'btn-secondary' : 'btn-ghost'}" onclick={() => togglePanel('saved')} aria-pressed={panel === 'saved'}><Bookmark />Saved</button>
+			<button class="btn btn-sm {panel === 'history' ? 'btn-secondary' : 'btn-ghost'}" onclick={() => togglePanel('history')} aria-pressed={panel === 'history'}>
 				<History />History
 			</button>
 		</div>
@@ -146,101 +264,123 @@
 	<div class="flex min-h-0 flex-1">
 		<div class="flex min-w-0 flex-1 flex-col">
 			<div style="height:{split}%" class="min-h-0 bg-surface">
-				<SqlEditor bind:this={editor} bind:value={sql} schema={completion} onrun={run} />
+				<SqlEditor bind:this={editor} bind:value={sql} schema={completion} onrun={run} onsave={openSave} onexplain={explain} />
 			</div>
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<div class="h-1 shrink-0 cursor-row-resize border-y border-border bg-surface hover:bg-primary/40" onpointerdown={resizeSplit}></div>
 
 			<div class="flex min-h-0 flex-1 flex-col">
-				{#if outcome}
-					{#if outcome.results.length > 1}
+				{#if outcome || planResult || planError}
+					{#if (outcome && outcome.results.length > 1) || planResult || planError}
 						<div class="flex gap-1 overflow-x-auto border-b border-border px-2 pt-1.5">
-							{#each outcome.results as r, i (i)}
+							{#if outcome && outcome.results.length > 1}
+								{#each outcome.results as r, i (i)}
+									<button
+										class="rounded-t-md border-x border-t px-2.5 py-1 text-[11px] whitespace-nowrap {view === 'results' && active === i
+											? 'border-border bg-card text-foreground'
+											: 'border-transparent text-muted-foreground hover:text-foreground'}"
+										onclick={() => ((active = i), (selected = null), (view = 'results'))}
+									>
+										{i + 1}. {r.command} <span class="opacity-60">{r.rowCount ?? r.rows.length}</span>
+									</button>
+								{/each}
+							{:else if outcome}
 								<button
-									class="rounded-t-md border-x border-t px-2.5 py-1 text-[11px] whitespace-nowrap {active === i
+									class="rounded-t-md border-x border-t px-2.5 py-1 text-[11px] whitespace-nowrap {view === 'results'
 										? 'border-border bg-card text-foreground'
 										: 'border-transparent text-muted-foreground hover:text-foreground'}"
-									onclick={() => ((active = i), (selected = null))}
+									onclick={() => (view = 'results')}
 								>
-									{i + 1}. {r.command} <span class="opacity-60">{r.rowCount ?? r.rows.length}</span>
+									Results{#if result} <span class="opacity-60">{result.rowCount ?? result.rows.length}</span>{/if}
 								</button>
-							{/each}
-						</div>
-					{/if}
-
-					{#if outcome.error && (!result || active === outcome.results.length - 1)}
-						{@const loc = errorLocation(outcome.error)}
-						<div class="m-3 rounded-xl border border-danger/30 bg-danger/5 p-4">
-							<div class="flex items-start gap-2.5">
-								<CircleAlert class="mt-0.5 size-4 shrink-0 text-danger" />
-								<div class="min-w-0 flex-1">
-									<p class="text-[13px] font-medium">{outcome.error.message}</p>
-									<p class="mt-1 font-mono text-[11px] text-muted-foreground">
-										{[
-											outcome.error.code && `SQLSTATE ${outcome.error.code}`,
-											`statement ${outcome.error.statementIndex + 1}`,
-											loc && `line ${loc.line}, col ${loc.col}`
-										]
-											.filter(Boolean)
-											.join(' · ')}
-									</p>
-									{#if loc}
-										<pre class="mt-2 overflow-x-auto rounded-md bg-background/60 p-2 font-mono text-[11px]">{loc.text}
-{' '.repeat(Math.max(0, loc.col - 1))}<span class="text-danger">^</span></pre>
-									{/if}
-									{#if outcome.error.detail}<p class="mt-2 text-xs text-muted-foreground"><b class="font-medium text-foreground">Detail:</b> {outcome.error.detail}</p>{/if}
-									{#if outcome.error.hint}<p class="mt-1 text-xs text-muted-foreground"><b class="font-medium text-foreground">Hint:</b> {outcome.error.hint}</p>{/if}
-								</div>
-							</div>
-						</div>
-					{/if}
-
-					{#if result}
-						{#if result.fields.length}
-							<div class="flex min-h-0 flex-1">
-								<div class="min-w-0 flex-1"><DataGrid {fields} rows={result.rows} bind:selected /></div>
-								<CellInspector bind:cell={selected} />
-							</div>
-						{:else if !outcome.error}
-							<div class="m-3 flex items-center gap-2.5 rounded-xl border border-success/30 bg-success/5 p-4 text-[13px]">
-								<CircleCheck class="size-4 text-success" />
-								<span><b class="font-medium">{result.command}</b>{#if result.rowCount != null} · {int(result.rowCount)} row{result.rowCount === 1 ? '' : 's'} affected{/if}</span>
-							</div>
-						{/if}
-						<div class="mt-auto flex items-center gap-3 border-t border-border bg-surface px-3 py-1.5 text-[11px] text-muted-foreground">
-							<span class="font-medium text-foreground">{result.command}</span>
-							<span class="tabular-nums">{int(result.rows.length)} row{result.rows.length === 1 ? '' : 's'}</span>
-							<span class="tabular-nums">{duration(result.durationMs)}</span>
-							{#if result.truncated}<span class="badge badge-warning">truncated — add a LIMIT</span>{/if}
-							{#if result.readOnly}<span class="flex items-center gap-1"><Lock class="size-3" />rolled back</span>{/if}
-							{#if result.fields.length}
-								<div class="ml-auto flex gap-1">
-									<button class="btn btn-ghost btn-sm" onclick={() => download('result.csv', csv(fields.map((f) => f.name), result.rows), 'text/csv')}><Download />CSV</button>
-									<button
-										class="btn btn-ghost btn-sm"
-										onclick={() =>
-											download(
-												'result.json',
-												JSON.stringify(result.rows.map((r) => Object.fromEntries(fields.map((f, i) => [f.name, r[i]]))), null, 2),
-												'application/json'
-											)}><Braces />JSON</button
-									>
-								</div>
+							{/if}
+							{#if planResult || planError}
+								<button
+									class="flex items-center gap-1 rounded-t-md border-x border-t px-2.5 py-1 text-[11px] whitespace-nowrap {view === 'plan'
+										? 'border-border bg-card text-foreground'
+										: 'border-transparent text-muted-foreground hover:text-foreground'}"
+									onclick={() => (view = 'plan')}
+								>
+									<Workflow class="size-3" />Plan{#if planResult?.analyzed} <span class="opacity-60">analyze</span>{/if}{#if planError} <span class="text-danger">error</span>{/if}
+								</button>
 							{/if}
 						</div>
+					{/if}
+
+					{#if view === 'plan' && (planResult || planError)}
+						{#if planResult}
+							<div class="min-h-0 flex-1"><PlanView plan={planResult.plan} executedWrite={planResult.executedWrite} readOnly={planResult.readOnly} /></div>
+						{:else if planError}
+							{@render queryError(planError, false)}
+						{/if}
+					{:else if outcome}
+						{#if outcome.error && (!result || active === outcome.results.length - 1)}
+							{@render queryError(outcome.error, true)}
+						{/if}
+
+						{#if result}
+							{#if result.fields.length}
+								<div class="flex min-h-0 flex-1">
+									<div class="min-w-0 flex-1"><DataGrid {fields} rows={result.rows} bind:selected /></div>
+									<CellInspector bind:cell={selected} />
+								</div>
+							{:else if !outcome.error}
+								<div class="m-3 flex items-center gap-2.5 rounded-xl border border-success/30 bg-success/5 p-4 text-[13px]">
+									<CircleCheck class="size-4 text-success" />
+									<span><b class="font-medium">{result.command}</b>{#if result.rowCount != null} · {int(result.rowCount)} row{result.rowCount === 1 ? '' : 's'} affected{/if}</span>
+								</div>
+							{/if}
+							<div class="mt-auto flex items-center gap-3 border-t border-border bg-surface px-3 py-1.5 text-[11px] text-muted-foreground">
+								<span class="font-medium text-foreground">{result.command}</span>
+								<span class="tabular-nums">{int(result.rows.length)} row{result.rows.length === 1 ? '' : 's'}</span>
+								<span class="tabular-nums">{duration(result.durationMs)}</span>
+								{#if result.truncated}<span class="badge badge-warning">truncated — add a LIMIT</span>{/if}
+								{#if result.readOnly}<span class="flex items-center gap-1"><Lock class="size-3" />rolled back</span>{/if}
+								{#if result.fields.length}
+									<div class="ml-auto flex gap-1">
+										<button class="btn btn-ghost btn-sm" onclick={() => download('result.csv', csv(fields.map((f) => f.name), result.rows), 'text/csv')}><Download />CSV</button>
+										<button
+											class="btn btn-ghost btn-sm"
+											onclick={() =>
+												download(
+													'result.json',
+													JSON.stringify(result.rows.map((r) => Object.fromEntries(fields.map((f, i) => [f.name, r[i]]))), null, 2),
+													'application/json'
+												)}><Braces />JSON</button
+										>
+									</div>
+								{/if}
+							</div>
+						{/if}
 					{/if}
 				{:else}
 					<div class="grid flex-1 place-items-center text-center text-xs text-muted-foreground">
 						<div>
 							<p>Run a query to see results.</p>
-							<p class="mt-2"><span class="kbd">⌘↵</span> statement · <span class="kbd">⇧⌘↵</span> everything · <span class="kbd">⌃Space</span> complete</p>
+							<p class="mt-2"><span class="kbd">⌘↵</span> statement · <span class="kbd">⇧⌘↵</span> everything · <span class="kbd">⌥⌘↵</span> explain analyze · <span class="kbd">⌘S</span> save · <span class="kbd">⌃Space</span> complete</p>
 						</div>
 					</div>
 				{/if}
 			</div>
 		</div>
 
-		{#if showHistory}
+		{#if panel === 'saved'}
+			<aside class="flex w-80 shrink-0 flex-col border-l border-border bg-surface">
+				<div class="flex items-center justify-between border-b border-border px-3 py-2">
+					<span class="text-[13px] font-semibold">Saved queries</span>
+					<button class="btn btn-ghost btn-sm" title="Save the editor's query (⌘S)" onclick={openSave}><Save />Save</button>
+				</div>
+				<div class="min-h-0 flex-1">
+					<SavedQueries
+						activeId={savedQuery?.id ?? null}
+						onload={loadSavedQuery}
+						onrun={(q) => (loadSavedQuery(q), run(q.sql))}
+						onedit={(q) => ((saveMode = 'edit'), (saveTarget = q), (saveOpen = true))}
+					/>
+				</div>
+			</aside>
+		{/if}
+		{#if panel === 'history'}
 			<aside class="flex w-80 shrink-0 flex-col border-l border-border bg-surface">
 				<div class="flex items-center justify-between border-b border-border px-3 py-2">
 					<span class="text-[13px] font-semibold">History</span>
@@ -262,6 +402,37 @@
 		{/if}
 	</div>
 </div>
+
+{#snippet queryError(e: QueryError & { sql: string; statementIndex: number }, showStatement: boolean)}
+	{@const loc = errorLocation(e)}
+	<div class="m-3 rounded-xl border border-danger/30 bg-danger/5 p-4">
+		<div class="flex items-start gap-2.5">
+			<CircleAlert class="mt-0.5 size-4 shrink-0 text-danger" />
+			<div class="min-w-0 flex-1">
+				<p class="text-[13px] font-medium">{e.message}</p>
+				<p class="mt-1 font-mono text-[11px] text-muted-foreground">
+					{[e.code && `SQLSTATE ${e.code}`, showStatement && `statement ${e.statementIndex + 1}`, loc && `line ${loc.line}, col ${loc.col}`].filter(Boolean).join(' · ')}
+				</p>
+				{#if loc}
+					<pre class="mt-2 overflow-x-auto rounded-md bg-background/60 p-2 font-mono text-[11px]">{loc.text}
+{' '.repeat(Math.max(0, loc.col - 1))}<span class="text-danger">^</span></pre>
+				{/if}
+				{#if e.detail}<p class="mt-2 text-xs text-muted-foreground"><b class="font-medium text-foreground">Detail:</b> {e.detail}</p>{/if}
+				{#if e.hint}<p class="mt-1 text-xs text-muted-foreground"><b class="font-medium text-foreground">Hint:</b> {e.hint}</p>{/if}
+			</div>
+		</div>
+	</div>
+{/snippet}
+
+<SaveQueryDialog
+	bind:open={saveOpen}
+	{connectionId}
+	{connectionName}
+	{sql}
+	existing={saveTarget}
+	mode={saveMode}
+	{onsaved}
+/>
 
 <Dialog bind:open={() => pending !== null, (v) => !v && (pending = null)} title="Run destructive statement?" description="You have write access here. Dropping, truncating, or changing every row can't be undone.">
 	<pre class="max-h-48 overflow-auto rounded-lg border border-border bg-surface p-3 font-mono text-xs">{pending}</pre>
