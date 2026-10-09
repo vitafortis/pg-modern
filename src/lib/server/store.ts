@@ -73,6 +73,7 @@ function db(): DatabaseSync {
 	`);
 	migrate(handle);
 	migrateSavedQueries(handle);
+	migrateBackups(handle);
 	return handle;
 }
 
@@ -701,4 +702,76 @@ export function updateSavedQuery(id: string, input: SavedQueryInput): SavedQuery
 
 export function deleteSavedQuery(id: string): boolean {
 	return Number(db().prepare('DELETE FROM saved_queries WHERE id = ?').run(id).changes) > 0;
+}
+
+// --- database backups --------------------------------------------------------
+// Tables only; the functions live in server/backups/store.ts (via sqlite()).
+
+function migrateBackups(h: DatabaseSync) {
+	h.exec(`
+		-- Where scheduled dumps go. Secrets (passwords, keys) are sealed in "secret".
+		CREATE TABLE IF NOT EXISTS backup_destinations (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			config TEXT NOT NULL,
+			secret TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
+
+		-- A NULL connection_id means "every connection".
+		CREATE TABLE IF NOT EXISTS backup_schedules (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			connection_id TEXT REFERENCES connections(id) ON DELETE CASCADE,
+			destination_id TEXT NOT NULL REFERENCES backup_destinations(id),
+			frequency TEXT NOT NULL,
+			minute INTEGER NOT NULL DEFAULT 0,
+			hour INTEGER NOT NULL DEFAULT 3,
+			weekday INTEGER NOT NULL DEFAULT 0,
+			keep_last INTEGER,
+			keep_days INTEGER,
+			compress INTEGER NOT NULL DEFAULT 1,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			last_run_at TEXT,
+			next_run_at TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
+
+		-- Backups and restores. Names are copied so runs outlive their connection/destination.
+		CREATE TABLE IF NOT EXISTS backup_runs (
+			id TEXT PRIMARY KEY,
+			kind TEXT NOT NULL DEFAULT 'backup',
+			status TEXT NOT NULL,
+			trigger TEXT NOT NULL,
+			schedule_id TEXT,
+			schedule_name TEXT,
+			connection_id TEXT,
+			connection_name TEXT NOT NULL,
+			engine TEXT NOT NULL,
+			databases TEXT NOT NULL DEFAULT '[]',
+			all_databases INTEGER NOT NULL DEFAULT 0,
+			destination_id TEXT,
+			destination_name TEXT NOT NULL,
+			file_name TEXT,
+			format TEXT,
+			size_bytes INTEGER,
+			started_at TEXT NOT NULL,
+			finished_at TEXT,
+			duration_ms INTEGER,
+			error TEXT,
+			warnings TEXT,
+			source_run_id TEXT,
+			deleted_at TEXT,
+			created_by TEXT
+		);
+		CREATE INDEX IF NOT EXISTS backup_runs_time ON backup_runs(started_at DESC);
+		CREATE INDEX IF NOT EXISTS backup_runs_conn ON backup_runs(connection_id, started_at DESC);
+	`);
+	// Nothing survives a restart mid-dump.
+	h.prepare(`UPDATE backup_runs SET status = 'failed', error = 'Interrupted by a restart', finished_at = ? WHERE status = 'running'`).run(
+		new Date().toISOString()
+	);
 }
