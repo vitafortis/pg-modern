@@ -23,6 +23,10 @@
 	--success: oklch(60% 0.15 155);
 	--warning: oklch(70% 0.16 70);
 	--danger: oklch(58% 0.22 25);
+	/* Filled primary buttons: a muted violet with depth, calmer than --primary (used for accents). */
+	--primary-solid-top: oklch(54% 0.18 292);
+	--primary-solid-bottom: oklch(48% 0.18 292);
+	--primary-solid-edge: oklch(42% 0.15 292);
 	--ring: var(--primary);
 	--glow: oklch(65% 0.24 292.717 / 0.12);
 	--shadow: 0 1px 3px 0 oklch(0% 0 0 / 0.06), 0 1px 2px -1px oklch(0% 0 0 / 0.06);
@@ -51,6 +55,9 @@
 	--primary: oklch(65% 0.24 292.717);
 	--primary-foreground: oklch(98.5% 0 0);
 	--primary-soft: oklch(65% 0.24 292.717 / 0.14);
+	--primary-solid-top: oklch(54% 0.15 292);
+	--primary-solid-bottom: oklch(47% 0.15 292);
+	--primary-solid-edge: oklch(40% 0.12 292);
 	--success: oklch(72% 0.17 155);
 	--warning: oklch(80% 0.15 75);
 	--danger: oklch(68% 0.2 25);
@@ -128,7 +135,15 @@
 		@apply relative inline-flex h-9 shrink-0 items-center justify-center gap-2 overflow-hidden rounded-xl px-4 text-[13px] font-medium whitespace-nowrap outline-none transition-all duration-200 select-none active:scale-[0.97] focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 has-[>svg]:px-3.5 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0;
 	}
 	.btn-primary {
-		@apply bg-primary text-primary-foreground shadow-xs shadow-primary/20 hover:bg-primary/90 hover:shadow-md hover:shadow-primary/30;
+		background: linear-gradient(var(--primary-solid-top), var(--primary-solid-bottom));
+		color: var(--primary-foreground);
+		box-shadow:
+			inset 0 1px 0 oklch(100% 0 0 / 0.14),
+			0 0 0 1px var(--primary-solid-edge),
+			0 1px 2px oklch(0% 0 0 / 0.2);
+	}
+	.btn-primary:hover {
+		filter: brightness(1.08);
 	}
 	.btn-secondary {
 		@apply border border-border bg-background/60 text-foreground backdrop-blur-sm hover:border-primary/40 hover:bg-primary/5 hover:text-primary;
