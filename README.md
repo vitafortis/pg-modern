@@ -565,3 +565,9 @@ pnpm screenshots                   # regenerate docs/screenshots (needs Docker)
 Requires Node 24+. The store uses the built-in `node:sqlite`, so there are no native modules. `pnpm screenshots` runs a seeded demo Postgres and a fake Docker API, so the images only ever show demo data.
 
 **Stack:** SvelteKit 3 · Svelte 5 · Tailwind CSS 4 · CodeMirror 6 · node-postgres · mysql2. The look follows [Arcane](https://getarcane.app).
+
+## License
+
+[Apache-2.0](LICENSE). Copyright 2026 vitafortis.
+
+Also by the same author: [octo·modern](https://github.com/vitafortis/octo-modern), a self-hosted web UI for one or more OctoPrint servers, in the same style.
